@@ -46,7 +46,7 @@ if (process.env.ENABLE_CRON === "true") {
 app.get("/", (req, res) => res.send("Express server running"));
 
 app.use("/api/newsmaker-v2/bi-rate", biRateRouter);
-app.use("/api/newsmaker-v2/ihsg", ihsgRouter);
+app.use("/api/newsmaker-v2/market", ihsgRouter);
 app.use("/api/newsmaker-v2/fx", fxRouter);
 app.use("/cron", cronRouter);
 
