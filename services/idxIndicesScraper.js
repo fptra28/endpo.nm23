@@ -1,7 +1,10 @@
 // services/idxIndicesScraper.js
 const axios = require("axios");
 const { CookieJar } = require("tough-cookie");
-const { wrapper } = require("axios-cookiejar-support");
+async function getAxiosWrapper() {
+    const mod = await import("axios-cookiejar-support");
+    return mod.wrapper || mod.default?.wrapper;
+}
 
 const IDX_PAGE_URL =
     process.env.IDX_INDICES_PAGE_URL ||
@@ -55,6 +58,10 @@ function extractItems(json) {
 
 async function fetchIdxIndicesCore() {
     const jar = new CookieJar();
+    const wrapper = await getAxiosWrapper();
+    if (!wrapper) {
+        throw new Error("Gagal memuat axios-cookiejar-support wrapper (ESM import).");
+    }
     const client = wrapper(
         axios.create({
             jar,
