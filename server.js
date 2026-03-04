@@ -2,6 +2,7 @@
 require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
+const cronRouter = require("./routes/cron");
 const biRateRouter = require("./routes/biRate");
 const ihsgRouter = require("./routes/ihsg");
 const fxRouter = require("./routes/fx");
@@ -44,9 +45,10 @@ if (process.env.ENABLE_CRON === "true") {
 
 app.get("/", (req, res) => res.send("Express server running"));
 
-app.use("/bi-rate", biRateRouter);
-app.use("/ihsg", ihsgRouter);
-app.use("/fx", fxRouter);
+app.use("/api/newsmaker-v2/bi-rate", biRateRouter);
+app.use("/api/newsmaker-v2/ihsg", ihsgRouter);
+app.use("/api/newsmaker-v2/fx", fxRouter);
+app.use("/cron", cronRouter);
 
 app.listen(PORT, () => console.log(`Server berjalan di http://localhost:${PORT}`));
 
