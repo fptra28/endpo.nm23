@@ -19,6 +19,7 @@
     "express": "^5.2.1",
     "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
+    "playwright": "^1.58.2",
     "tough-cookie": "^6.0.0"
   }
 }
