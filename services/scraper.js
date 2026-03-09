@@ -4,6 +4,8 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const http = require("http");
 const https = require("https");
+const path = require("path");
+const fs = require("fs");
 const { parseIndoDate, normalizeUrl } = require("../utils/text");
 
 const BI_RATE_URL_ID =
@@ -15,6 +17,8 @@ const BI_RATE_URL_EN = "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx
 // cache biar ga spam BI
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 6 * 60 * 60 * 1000);
 let cache = { fetchedAt: 0, payload: null };
+const DATA_DIR = path.resolve(__dirname, "..", "data");
+const BI_RATE_CACHE_FILE = path.join(DATA_DIR, "bi_rate.json");
 
 // keep-alive agent biar koneksi stabil
 const httpAgent = new http.Agent({ keepAlive: true });
@@ -128,6 +132,25 @@ function scrapeFromHtml(html, { preferIndoDate = true } = {}) {
 async function fetchBiRate({ from, to } = {}) {
     // cache HIT
     const now = Date.now();
+    try {
+        if (fs.existsSync(BI_RATE_CACHE_FILE)) {
+            const raw = fs.readFileSync(BI_RATE_CACHE_FILE, "utf8");
+            const filePayload = JSON.parse(raw);
+            const fetchedAt = Date.parse(filePayload.fetched_at || "");
+            if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                const filtered = filterByDate(filePayload.data || [], { from, to });
+                return {
+                    source: filePayload.source,
+                    count: filtered.length,
+                    data: filtered,
+                    fetched_at: filePayload.fetched_at,
+                    cache: "HIT_FILE",
+                };
+            }
+        }
+    } catch (e) {
+        console.error("Gagal membaca cache file BI Rate:", e.message);
+    }
     if (cache.payload && now - cache.fetchedAt < CACHE_TTL_MS) {
         const filtered = filterByDate(cache.payload.data, { from, to });
         return {
@@ -155,6 +178,13 @@ async function fetchBiRate({ from, to } = {}) {
 
         cache = { fetchedAt: now, payload: { source, data: items, fetched_at: payload.fetched_at } };
 
+        try {
+            if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+            fs.writeFileSync(BI_RATE_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+        } catch (e) {
+            console.error("Gagal menulis cache file BI Rate:", e.message);
+        }
+
         return { ...payload, cache: "MISS" };
     } catch (e) {
         // 2) fallback ke halaman EN (kadang ID nge-reset)
@@ -174,6 +204,13 @@ async function fetchBiRate({ from, to } = {}) {
             };
 
             cache = { fetchedAt: now, payload: { source, data: normalized, fetched_at: payload.fetched_at } };
+
+            try {
+                if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+                fs.writeFileSync(BI_RATE_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+            } catch (e) {
+                console.error("Gagal menulis cache file BI Rate:", e.message);
+            }
 
             return { ...payload, cache: "MISS_FALLBACK_EN" };
         } catch (e2) {

@@ -9,6 +9,8 @@ let cache = { at: 0, payload: null };
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
+const path = require("path");
+const fs = require("fs");
 
 const CNBC_BASE = "https://www.cnbcindonesia.com/market-data/quote";
 const QUOTES = [
@@ -23,6 +25,9 @@ const QUOTES = [
     { symbol: "ADRO" },
     { symbol: "GOTO" },
 ];
+
+const DATA_DIR = path.resolve(__dirname, "..", "data");
+const CNBC_CACHE_FILE = path.join(DATA_DIR, "cnbc.json");
 
 function buildCnbcUrl(symbol) {
     const code = `${symbol}.JK`;
@@ -147,6 +152,36 @@ async function fetchCnbcSingle({ symbol }) {
 async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
     const now = Date.now();
 
+    if (!bypassCache) {
+        try {
+            if (fs.existsSync(CNBC_CACHE_FILE)) {
+                const raw = fs.readFileSync(CNBC_CACHE_FILE, "utf8");
+                const filePayload = JSON.parse(raw);
+                const fetchedAt = Date.parse(filePayload.fetched_at || "");
+                if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                    const item = Array.isArray(filePayload.data)
+                        ? filePayload.data.find((x) => x.symbol === "BBCA")
+                        : null;
+                    if (item) {
+                        return {
+                            source: buildCnbcUrl("BBCA"),
+                            symbol: item.symbol,
+                            name: item.name || null,
+                            last: item.last,
+                            change: item.change,
+                            change_percent: item.change_percent,
+                            currency: item.currency || "IDR",
+                            fetched_at: filePayload.fetched_at,
+                            cache: "HIT_FILE",
+                        };
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Gagal membaca cache file CNBC:", e.message);
+        }
+    }
+
     if (!bypassCache && cache.payload && now - cache.at < CACHE_TTL_MS) {
         return { ...cache.payload, cache: "HIT" };
     }
@@ -158,6 +193,21 @@ async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
 
 async function fetchInvestingMultipleCached({ bypassCache = false } = {}) {
     const now = Date.now();
+
+    if (!bypassCache) {
+        try {
+            if (fs.existsSync(CNBC_CACHE_FILE)) {
+                const raw = fs.readFileSync(CNBC_CACHE_FILE, "utf8");
+                const filePayload = JSON.parse(raw);
+                const fetchedAt = Date.parse(filePayload.fetched_at || "");
+                if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                    return { ...filePayload, cache: "HIT_FILE" };
+                }
+            }
+        } catch (e) {
+            console.error("Gagal membaca cache file CNBC:", e.message);
+        }
+    }
 
     if (!bypassCache && cache.payload && now - cache.at < CACHE_TTL_MS) {
         return { ...cache.payload, cache: "HIT" };
@@ -176,6 +226,15 @@ async function fetchInvestingMultipleCached({ bypassCache = false } = {}) {
     };
 
     cache = { at: now, payload };
+
+    try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(CNBC_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+    } catch (e) {
+        // jangan blok request kalau gagal tulis file
+        console.error("Gagal menulis cache file CNBC:", e.message);
+    }
+
     return { ...payload, cache: "MISS" };
 }
 

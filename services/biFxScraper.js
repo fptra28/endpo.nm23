@@ -7,6 +7,8 @@ const { parseIdNumber } = require("../utils/number");
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
+const path = require("path");
+const fs = require("fs");
 
 const BI_FX_URL =
     process.env.BI_FX_URL ||
@@ -14,6 +16,9 @@ const BI_FX_URL =
 
 const CACHE_TTL_MS = Number(process.env.BI_CACHE_TTL_MS || 5 * 60 * 1000); // 5 menit
 let cache = { at: 0, payload: null };
+
+const DATA_DIR = path.resolve(__dirname, "..", "data");
+const BI_FX_CACHE_FILE = path.join(DATA_DIR, "bi_fx.json");
 
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
@@ -123,6 +128,19 @@ function parseBiFxFromHtml(html) {
 
 async function fetchBiFxCached() {
     const now = Date.now();
+    try {
+        if (fs.existsSync(BI_FX_CACHE_FILE)) {
+            const raw = fs.readFileSync(BI_FX_CACHE_FILE, "utf8");
+            const filePayload = JSON.parse(raw);
+            const fetchedAt = Date.parse(filePayload.fetched_at || "");
+            if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                return { ...filePayload, cache: "HIT_FILE" };
+            }
+        }
+    } catch (e) {
+        console.error("Gagal membaca cache file BI FX:", e.message);
+    }
+
     if (cache.payload && now - cache.at < CACHE_TTL_MS) {
         return { ...cache.payload, cache: "HIT" };
     }
@@ -131,6 +149,12 @@ async function fetchBiFxCached() {
     const payload = parseBiFxFromHtml(html);
 
     cache = { at: now, payload };
+    try {
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(BI_FX_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+    } catch (e) {
+        console.error("Gagal menulis cache file BI FX:", e.message);
+    }
     return { ...payload, cache: "MISS" };
 }
 

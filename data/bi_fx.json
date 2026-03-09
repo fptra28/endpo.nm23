@@ -1,0 +1,163 @@
+{
+  "source": "https://www.bi.go.id/id/statistik/informasi-kurs/transaksi-bi/default.aspx",
+  "count": 26,
+  "data": [
+    {
+      "currency": "AED",
+      "unit": 1,
+      "sell": 4630.11,
+      "buy": 4582.16
+    },
+    {
+      "currency": "AUD",
+      "unit": 1,
+      "sell": 11979.04,
+      "buy": 11856.47
+    },
+    {
+      "currency": "BND",
+      "unit": 1,
+      "sell": 13314.23,
+      "buy": 13179.68
+    },
+    {
+      "currency": "CAD",
+      "unit": 1,
+      "sell": 12455.94,
+      "buy": 12331.09
+    },
+    {
+      "currency": "CHF",
+      "unit": 1,
+      "sell": 21816.27,
+      "buy": 21596.41
+    },
+    {
+      "currency": "CNH",
+      "unit": 1,
+      "sell": 2464.18,
+      "buy": 2439.27
+    },
+    {
+      "currency": "CNY",
+      "unit": 1,
+      "sell": 2465.25,
+      "buy": 2440.3
+    },
+    {
+      "currency": "DKK",
+      "unit": 1,
+      "sell": 2643.51,
+      "buy": 2617.09
+    },
+    {
+      "currency": "EUR",
+      "unit": 1,
+      "sell": 19751.38,
+      "buy": 19551.47
+    },
+    {
+      "currency": "GBP",
+      "unit": 1,
+      "sell": 22738.91,
+      "buy": 22500.86
+    },
+    {
+      "currency": "HKD",
+      "unit": 1,
+      "sell": 2173.57,
+      "buy": 2151.75
+    },
+    {
+      "currency": "JPY",
+      "unit": 100,
+      "sell": 10793.88,
+      "buy": 10685.79
+    },
+    {
+      "currency": "KRW",
+      "unit": 1,
+      "sell": 11.57,
+      "buy": 11.46
+    },
+    {
+      "currency": "KWD",
+      "unit": 1,
+      "sell": 55540.09,
+      "buy": 54969.47
+    },
+    {
+      "currency": "LAK",
+      "unit": 1,
+      "sell": 0.8,
+      "buy": 0.78
+    },
+    {
+      "currency": "MYR",
+      "unit": 1,
+      "sell": 4310.16,
+      "buy": 4261.87
+    },
+    {
+      "currency": "NOK",
+      "unit": 1,
+      "sell": 1763.42,
+      "buy": 1745.4
+    },
+    {
+      "currency": "NZD",
+      "unit": 1,
+      "sell": 10055.93,
+      "buy": 9950.81
+    },
+    {
+      "currency": "PGK",
+      "unit": 1,
+      "sell": 4097.87,
+      "buy": 3770.91
+    },
+    {
+      "currency": "PHP",
+      "unit": 1,
+      "sell": 288.35,
+      "buy": 285.1
+    },
+    {
+      "currency": "SAR",
+      "unit": 1,
+      "sell": 4530.19,
+      "buy": 4483.91
+    },
+    {
+      "currency": "SEK",
+      "unit": 1,
+      "sell": 1847.27,
+      "buy": 1828.57
+    },
+    {
+      "currency": "SGD",
+      "unit": 1,
+      "sell": 13314.23,
+      "buy": 13179.68
+    },
+    {
+      "currency": "THB",
+      "unit": 1,
+      "sell": 536.05,
+      "buy": 530.05
+    },
+    {
+      "currency": "USD",
+      "unit": 1,
+      "sell": 17003.6,
+      "buy": 16834.4
+    },
+    {
+      "currency": "VND",
+      "unit": 1,
+      "sell": 0.65,
+      "buy": 0.64
+    }
+  ],
+  "fetched_at": "2026-03-09T03:33:33.683Z"
+}

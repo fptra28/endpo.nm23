@@ -1,6 +1,5 @@
 const express = require("express");
 const { fetchBiRate } = require("../services/scraper");
-const { fetchIdxIndicesCached } = require("../services/idxIndicesScraper");
 const { fetchBiFxCached } = require("../services/biFxScraper");
 
 const router = express.Router();
@@ -8,7 +7,6 @@ const router = express.Router();
 router.get("/update-market", async (req, res) => {
     try {
         await fetchBiRate();
-        await fetchIdxIndicesCached();
         await fetchBiFxCached();
 
         res.json({

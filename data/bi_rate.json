@@ -1,0 +1,77 @@
+{
+  "source": "https://www.bi.go.id/id/statistik/indikator/bi-rate.aspx",
+  "count": 10,
+  "data": [
+    {
+      "date": "2026-02-19",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_284326.aspx",
+      "raw_date": "19 Februari 2026",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2026-01-21",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_281326.aspx",
+      "raw_date": "21 Januari 2026",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2025-12-17",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2730425.aspx",
+      "raw_date": "17 Desember 2025",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2025-11-19",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2727425.aspx",
+      "raw_date": "19 November 2025",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2025-10-22",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2725025.aspx",
+      "raw_date": "22 Oktober 2025",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2025-09-17",
+      "rate": 4.75,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2721925.aspx",
+      "raw_date": "17 September 2025",
+      "raw_rate": "4.75 %"
+    },
+    {
+      "date": "2025-08-20",
+      "rate": 5,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2719425.aspx",
+      "raw_date": "20 Agustus 2025",
+      "raw_rate": "5.00 %"
+    },
+    {
+      "date": "2025-07-16",
+      "rate": 5.25,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2715325.aspx",
+      "raw_date": "16 Juli 2025",
+      "raw_rate": "5.25 %"
+    },
+    {
+      "date": "2025-06-18",
+      "rate": 5.5,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2713325.aspx",
+      "raw_date": "18 Juni 2025",
+      "raw_rate": "5.50 %"
+    },
+    {
+      "date": "2025-05-21",
+      "rate": 5.5,
+      "press_release_url": "https://www.bi.go.id/id/publikasi/ruang-media/news-release/Pages/sp_2711125.aspx",
+      "raw_date": "21 Mei 2025",
+      "raw_rate": "5.50 %"
+    }
+  ],
+  "fetched_at": "2026-03-09T03:33:00.314Z"
+}

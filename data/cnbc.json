@@ -1,0 +1,188 @@
+{
+  "source": [
+    "https://www.cnbcindonesia.com/market-data/quote/BBCA.JK/BBCA",
+    "https://www.cnbcindonesia.com/market-data/quote/BBRI.JK/BBRI",
+    "https://www.cnbcindonesia.com/market-data/quote/BMRI.JK/BMRI",
+    "https://www.cnbcindonesia.com/market-data/quote/TLKM.JK/TLKM",
+    "https://www.cnbcindonesia.com/market-data/quote/ASII.JK/ASII",
+    "https://www.cnbcindonesia.com/market-data/quote/BBNI.JK/BBNI",
+    "https://www.cnbcindonesia.com/market-data/quote/UNVR.JK/UNVR",
+    "https://www.cnbcindonesia.com/market-data/quote/ICBP.JK/ICBP",
+    "https://www.cnbcindonesia.com/market-data/quote/ADRO.JK/ADRO",
+    "https://www.cnbcindonesia.com/market-data/quote/GOTO.JK/GOTO"
+  ],
+  "count": 10,
+  "data": [
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/BBCA.JK/BBCA",
+      "symbol": "BBCA",
+      "name": "BNK CENTRAL ASIA",
+      "last": 6900,
+      "change": -100,
+      "change_percent": -1.43,
+      "currency": "IDR",
+      "raw": {
+        "kode": "BBCA.JK",
+        "nama": "BNK CENTRAL ASIA",
+        "price": "6,900",
+        "change": "-100",
+        "percent": "(-1.43%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.402Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/BBRI.JK/BBRI",
+      "symbol": "BBRI",
+      "name": "BANK RAKYAT INDO",
+      "last": 3580,
+      "change": -90,
+      "change_percent": -2.45,
+      "currency": "IDR",
+      "raw": {
+        "kode": "BBRI.JK",
+        "nama": "BANK RAKYAT INDO",
+        "price": "3,580",
+        "change": "-90",
+        "percent": "(-2.45%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.518Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/BMRI.JK/BMRI",
+      "symbol": "BMRI",
+      "name": "BANK MANDIRI TBK",
+      "last": 4810,
+      "change": -170,
+      "change_percent": -3.41,
+      "currency": "IDR",
+      "raw": {
+        "kode": "BMRI.JK",
+        "nama": "BANK MANDIRI TBK",
+        "price": "4,810",
+        "change": "-170",
+        "percent": "(-3.41%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.590Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/TLKM.JK/TLKM",
+      "symbol": "TLKM",
+      "name": "TELKOM INDONESIA",
+      "last": 3040,
+      "change": -150,
+      "change_percent": -4.7,
+      "currency": "IDR",
+      "raw": {
+        "kode": "TLKM.JK",
+        "nama": "TELKOM INDONESIA",
+        "price": "3,040",
+        "change": "-150",
+        "percent": "(-4.7%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.679Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/ASII.JK/ASII",
+      "symbol": "ASII",
+      "name": "ASTRA INTL TBK",
+      "last": 5875,
+      "change": -250,
+      "change_percent": -4.08,
+      "currency": "IDR",
+      "raw": {
+        "kode": "ASII.JK",
+        "nama": "ASTRA INTL TBK",
+        "price": "5,875",
+        "change": "-250",
+        "percent": "(-4.08%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.744Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/BBNI.JK/BBNI",
+      "symbol": "BBNI",
+      "name": "BANK BNI TBK",
+      "last": 4170,
+      "change": -100,
+      "change_percent": -2.34,
+      "currency": "IDR",
+      "raw": {
+        "kode": "BBNI.JK",
+        "nama": "BANK BNI TBK",
+        "price": "4,170",
+        "change": "-100",
+        "percent": "(-2.34%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.820Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/UNVR.JK/UNVR",
+      "symbol": "UNVR",
+      "name": "UNILEVER INDONES",
+      "last": 1890,
+      "change": -85,
+      "change_percent": -4.3,
+      "currency": "IDR",
+      "raw": {
+        "kode": "UNVR.JK",
+        "nama": "UNILEVER INDONES",
+        "price": "1,890",
+        "change": "-85",
+        "percent": "(-4.3%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.901Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/ICBP.JK/ICBP",
+      "symbol": "ICBP",
+      "name": "INDOFOOD CBP",
+      "last": 7225,
+      "change": -225,
+      "change_percent": -3.02,
+      "currency": "IDR",
+      "raw": {
+        "kode": "ICBP.JK",
+        "nama": "INDOFOOD CBP",
+        "price": "7,225",
+        "change": "-225",
+        "percent": "(-3.02%)"
+      },
+      "fetched_at": "2026-03-09T03:36:36.966Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/ADRO.JK/ADRO",
+      "symbol": "ADRO",
+      "name": "ALAMTRI RESOURCE",
+      "last": 2310,
+      "change": -90,
+      "change_percent": -3.75,
+      "currency": "IDR",
+      "raw": {
+        "kode": "ADRO.JK",
+        "nama": "ALAMTRI RESOURCE",
+        "price": "2,310",
+        "change": "-90",
+        "percent": "(-3.75%)"
+      },
+      "fetched_at": "2026-03-09T03:36:37.087Z"
+    },
+    {
+      "source": "https://www.cnbcindonesia.com/market-data/quote/GOTO.JK/GOTO",
+      "symbol": "GOTO",
+      "name": "GOTO GOJEK",
+      "last": 53,
+      "change": -3,
+      "change_percent": -5.36,
+      "currency": "IDR",
+      "raw": {
+        "kode": "GOTO.JK",
+        "nama": "GOTO GOJEK",
+        "price": "53",
+        "change": "-3",
+        "percent": "(-5.36%)"
+      },
+      "fetched_at": "2026-03-09T03:36:37.163Z"
+    }
+  ],
+  "fetched_at": "2026-03-09T03:36:37.163Z"
+}
