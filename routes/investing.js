@@ -13,17 +13,16 @@ router.get("/", async (req, res) => {
         const bypassCache = String(req.query.nocache || "") === "1";
         const out = await fetchInvestingMultipleCached({ bypassCache });
         res.json({
-            source: out.source,
             fetched_at: out.fetched_at,
             cache: out.cache,
             data: Array.isArray(out.data)
                 ? out.data.map((item) => ({
-                      symbol: item.symbol,
-                      last: item.last,
-                      change: item.change,
-                      change_percent: item.change_percent,
-                      currency: item.currency,
-                  }))
+                    symbol: item.symbol,
+                    last: item.last,
+                    change: item.change,
+                    change_percent: item.change_percent,
+                    currency: item.currency,
+                }))
                 : [],
         });
     } catch (e) {
