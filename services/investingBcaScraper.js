@@ -9,8 +9,7 @@ let cache = { at: 0, payload: null };
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
-const path = require("path");
-const fs = require("fs");
+const { getCache, setCache } = require("./cacheStore");
 
 const CNBC_BASE = "https://www.cnbcindonesia.com/market-data/quote";
 const QUOTES = [
@@ -26,8 +25,7 @@ const QUOTES = [
     { symbol: "GOTO" },
 ];
 
-const DATA_DIR = path.resolve(__dirname, "..", "data");
-const CNBC_CACHE_FILE = path.join(DATA_DIR, "cnbc.json");
+const CACHE_KEY = "cnbc_quotes";
 
 function buildCnbcUrl(symbol) {
     const code = `${symbol}.JK`;
@@ -154,13 +152,12 @@ async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
 
     if (!bypassCache) {
         try {
-            if (fs.existsSync(CNBC_CACHE_FILE)) {
-                const raw = fs.readFileSync(CNBC_CACHE_FILE, "utf8");
-                const filePayload = JSON.parse(raw);
-                const fetchedAt = Date.parse(filePayload.fetched_at || "");
+            const cached = await getCache(CACHE_KEY);
+            if (cached && cached.fetched_at) {
+                const fetchedAt = Date.parse(cached.fetched_at);
                 if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
-                    const item = Array.isArray(filePayload.data)
-                        ? filePayload.data.find((x) => x.symbol === "BBCA")
+                    const item = Array.isArray(cached.payload?.data)
+                        ? cached.payload.data.find((x) => x.symbol === "BBCA")
                         : null;
                     if (item) {
                         return {
@@ -171,14 +168,14 @@ async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
                             change: item.change,
                             change_percent: item.change_percent,
                             currency: item.currency || "IDR",
-                            fetched_at: filePayload.fetched_at,
-                            cache: "HIT_FILE",
+                            fetched_at: cached.fetched_at,
+                            cache: "HIT_DB",
                         };
                     }
                 }
             }
         } catch (e) {
-            console.error("Gagal membaca cache file CNBC:", e.message);
+            console.error("Gagal membaca cache DB CNBC:", e.message);
         }
     }
 
@@ -196,16 +193,15 @@ async function fetchInvestingMultipleCached({ bypassCache = false } = {}) {
 
     if (!bypassCache) {
         try {
-            if (fs.existsSync(CNBC_CACHE_FILE)) {
-                const raw = fs.readFileSync(CNBC_CACHE_FILE, "utf8");
-                const filePayload = JSON.parse(raw);
-                const fetchedAt = Date.parse(filePayload.fetched_at || "");
+            const cached = await getCache(CACHE_KEY);
+            if (cached && cached.fetched_at) {
+                const fetchedAt = Date.parse(cached.fetched_at);
                 if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
-                    return { ...filePayload, cache: "HIT_FILE" };
+                    return { ...cached.payload, cache: "HIT_DB" };
                 }
             }
         } catch (e) {
-            console.error("Gagal membaca cache file CNBC:", e.message);
+            console.error("Gagal membaca cache DB CNBC:", e.message);
         }
     }
 
@@ -228,11 +224,10 @@ async function fetchInvestingMultipleCached({ bypassCache = false } = {}) {
     cache = { at: now, payload };
 
     try {
-        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(CNBC_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+        await setCache(CACHE_KEY, payload, payload.fetched_at);
     } catch (e) {
         // jangan blok request kalau gagal tulis file
-        console.error("Gagal menulis cache file CNBC:", e.message);
+        console.error("Gagal menulis cache DB CNBC:", e.message);
     }
 
     return { ...payload, cache: "MISS" };

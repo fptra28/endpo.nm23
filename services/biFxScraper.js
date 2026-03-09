@@ -7,8 +7,7 @@ const { parseIdNumber } = require("../utils/number");
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
-const path = require("path");
-const fs = require("fs");
+const { getCache, setCache } = require("./cacheStore");
 
 const BI_FX_URL =
     process.env.BI_FX_URL ||
@@ -17,8 +16,7 @@ const BI_FX_URL =
 const CACHE_TTL_MS = Number(process.env.BI_CACHE_TTL_MS || 5 * 60 * 1000); // 5 menit
 let cache = { at: 0, payload: null };
 
-const DATA_DIR = path.resolve(__dirname, "..", "data");
-const BI_FX_CACHE_FILE = path.join(DATA_DIR, "bi_fx.json");
+const CACHE_KEY = "bi_fx";
 
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
@@ -129,16 +127,15 @@ function parseBiFxFromHtml(html) {
 async function fetchBiFxCached() {
     const now = Date.now();
     try {
-        if (fs.existsSync(BI_FX_CACHE_FILE)) {
-            const raw = fs.readFileSync(BI_FX_CACHE_FILE, "utf8");
-            const filePayload = JSON.parse(raw);
-            const fetchedAt = Date.parse(filePayload.fetched_at || "");
+        const cached = await getCache(CACHE_KEY);
+        if (cached && cached.fetched_at) {
+            const fetchedAt = Date.parse(cached.fetched_at);
             if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
-                return { ...filePayload, cache: "HIT_FILE" };
+                return { ...cached.payload, cache: "HIT_DB" };
             }
         }
     } catch (e) {
-        console.error("Gagal membaca cache file BI FX:", e.message);
+        console.error("Gagal membaca cache DB BI FX:", e.message);
     }
 
     if (cache.payload && now - cache.at < CACHE_TTL_MS) {
@@ -150,10 +147,9 @@ async function fetchBiFxCached() {
 
     cache = { at: now, payload };
     try {
-        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(BI_FX_CACHE_FILE, JSON.stringify(payload, null, 2), "utf8");
+        await setCache(CACHE_KEY, payload, payload.fetched_at);
     } catch (e) {
-        console.error("Gagal menulis cache file BI FX:", e.message);
+        console.error("Gagal menulis cache DB BI FX:", e.message);
     }
     return { ...payload, cache: "MISS" };
 }
