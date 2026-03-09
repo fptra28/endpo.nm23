@@ -6,6 +6,8 @@ const cronRouter = require("./routes/cron");
 const biRateRouter = require("./routes/biRate");
 const ihsgRouter = require("./routes/ihsg");
 const fxRouter = require("./routes/fx");
+const investingBcaRouter = require("./routes/investingBca");
+const investingRouter = require("./routes/investing");
 
 // ❌ jangan start cron di Vercel serverless
 // const { startCron } = require("./services/cron");
@@ -48,6 +50,8 @@ app.get("/", (req, res) => res.send("Express server running"));
 app.use("/api/newsmaker-v2/bi-rate", biRateRouter);
 app.use("/api/newsmaker-v2/market", ihsgRouter);
 app.use("/api/newsmaker-v2/fx", fxRouter);
+app.use("/api/newsmaker-v2/investing/bca", investingBcaRouter);
+app.use("/api/newsmaker-v2/investing", investingRouter);
 app.use("/cron", cronRouter);
 
 app.listen(PORT, () => console.log(`Server berjalan di http://localhost:${PORT}`));
