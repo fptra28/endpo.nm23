@@ -1,5 +1,5 @@
 // services/idxIndicesScraper.js
-const { chromium } = require("playwright");
+const { launchChromium } = require("./browser");
 
 const CACHE_TTL_MS = Number(process.env.TRADINGVIEW_CACHE_TTL_MS || 5 * 60 * 1000);
 let cache = { at: 0, payload: null };
@@ -42,9 +42,7 @@ async function fetchTradingViewComposite() {
     let browser;
 
     try {
-        browser = await chromium.launch({
-            headless: true,
-        });
+        browser = await launchChromium();
 
         const context = await browser.newContext({
             userAgent:

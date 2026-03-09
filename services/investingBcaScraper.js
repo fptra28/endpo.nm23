@@ -1,5 +1,5 @@
 // services/investingBcaScraper.js
-const { chromium } = require("playwright");
+const { launchChromium } = require("./browser");
 
 const INVESTING_BCA_URL = "https://id.investing.com/equities/bnk-central-as";
 const INVESTING_BRI_URL = "https://id.investing.com/equities/bank-rakyat-in";
@@ -56,7 +56,7 @@ async function fetchInvestingSingle({ url, symbol }) {
     let browser;
 
     try {
-        browser = await chromium.launch({ headless: true });
+        browser = await launchChromium();
         const context = await browser.newContext({
             userAgent:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
