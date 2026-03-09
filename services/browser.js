@@ -13,11 +13,16 @@ function isServerlessEnv() {
 
 async function getLaunchOptions() {
     if (isServerlessEnv()) {
+        const headlessValue = chromium.headless;
+        const headless =
+            typeof headlessValue === "boolean"
+                ? headlessValue
+                : String(headlessValue).toLowerCase() !== "false";
         return {
             args: chromium.args,
             defaultViewport: chromium.defaultViewport,
             executablePath: await chromium.executablePath(),
-            headless: chromium.headless,
+            headless,
         };
     }
 
