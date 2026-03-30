@@ -1,9 +1,11 @@
-// services/scraper.js
-
 const axios = require("axios");
 const cheerio = require("cheerio");
 const http = require("http");
 const https = require("https");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { execFileSync } = require("child_process");
 const { getCache, setCache } = require("./cacheStore");
 const { parseIndoDate, normalizeUrl } = require("../utils/text");
 
@@ -13,110 +15,285 @@ const BI_RATE_URL_ID =
 
 const BI_RATE_URL_EN = "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx";
 
-// cache biar ga spam BI
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 6 * 60 * 60 * 1000);
-let cache = { fetchedAt: 0, payload: null };
+const REQUEST_TIMEOUT_MS = Number(process.env.BI_RATE_TIMEOUT_MS || 20000);
+const MAX_PAGE_COUNT = Number(process.env.BI_RATE_MAX_PAGES || 50);
+const CURL_MAX_BUFFER = 20 * 1024 * 1024;
 const CACHE_KEY = "bi_rate";
 
-// keep-alive agent biar koneksi stabil
+let cache = { fetchedAt: 0, payload: null };
+
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
+const DEFAULT_HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    Connection: "keep-alive",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+};
+
 function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function axiosGetWithRetry(url, tries = 3) {
-    let lastErr;
+function createAxiosClient() {
+    return axios.create({
+        timeout: REQUEST_TIMEOUT_MS,
+        httpAgent,
+        httpsAgent,
+        decompress: true,
+        maxRedirects: 5,
+        validateStatus: (status) => status >= 200 && status < 400,
+    });
+}
 
-    for (let i = 1; i <= tries; i++) {
-        try {
-            const res = await axios.get(url, {
-                headers: {
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                    Accept:
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-                    Connection: "keep-alive",
-                    "Cache-Control": "no-cache",
-                    Pragma: "no-cache",
-                },
-                timeout: 20000,
-                httpAgent,
-                httpsAgent,
-                // BI kadang pakai kompresi; axios handle tapi ini bantu di beberapa host
-                decompress: true,
-                maxRedirects: 5,
-                validateStatus: (s) => s >= 200 && s < 400,
-            });
+function mergeCookieHeader(currentHeader, setCookieHeader) {
+    const cookies = new Map();
 
-            return res.data;
-        } catch (err) {
-            lastErr = err;
+    for (const pair of String(currentHeader || "").split(/;\s*/)) {
+        if (!pair) continue;
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(
+            pair.slice(0, separatorIndex),
+            pair.slice(separatorIndex + 1)
+        );
+    }
 
-            // backoff biar ga dianggap spam
-            await sleep(500 * i);
+    const newCookies = Array.isArray(setCookieHeader)
+        ? setCookieHeader
+        : setCookieHeader
+          ? [setCookieHeader]
+          : [];
 
-            // kalau sudah percobaan terakhir, lempar error
-            if (i === tries) throw lastErr;
+    for (const rawCookie of newCookies) {
+        const pair = String(rawCookie).split(";")[0].trim();
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(
+            pair.slice(0, separatorIndex),
+            pair.slice(separatorIndex + 1)
+        );
+    }
+
+    return Array.from(cookies.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; ");
+}
+
+function isRetryableRequestError(error) {
+    const code = String(error?.code || "").toUpperCase();
+    return (
+        code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        code === "ECONNABORTED" ||
+        code === "EPROTO" ||
+        code === "EAI_AGAIN" ||
+        code === "UND_ERR_SOCKET" ||
+        code === "ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR"
+    );
+}
+
+function createTempFile(prefix, contents = "") {
+    const name = `${prefix}-${process.pid}-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.tmp`;
+    const filePath = path.join(os.tmpdir(), name);
+    fs.writeFileSync(filePath, contents, "utf8");
+    return filePath;
+}
+
+function createRequestSession() {
+    return {
+        client: createAxiosClient(),
+        cookieHeader: "",
+        cookieFile: createTempFile("bi-rate-cookie"),
+    };
+}
+
+function cleanupRequestSession(session) {
+    if (!session?.cookieFile) return;
+    try {
+        fs.unlinkSync(session.cookieFile);
+    } catch (_) {
+        // ignore temp cleanup error
+    }
+}
+
+function requestWithCurl({ session, url, method = "GET", form = null }) {
+    const curlCommand = process.platform === "win32" ? "curl.exe" : "curl";
+    const args = [
+        "-sS",
+        "-L",
+        "--http1.1",
+        "--tlsv1.2",
+        "-A",
+        DEFAULT_HEADERS["User-Agent"],
+        "-H",
+        `Accept: ${DEFAULT_HEADERS.Accept}`,
+        "-H",
+        `Accept-Language: ${DEFAULT_HEADERS["Accept-Language"]}`,
+        "-H",
+        `Cache-Control: ${DEFAULT_HEADERS["Cache-Control"]}`,
+        "-H",
+        `Pragma: ${DEFAULT_HEADERS.Pragma}`,
+        "-H",
+        `Connection: ${DEFAULT_HEADERS.Connection}`,
+        "-c",
+        session.cookieFile,
+        "-b",
+        session.cookieFile,
+    ];
+
+    let bodyFile = null;
+
+    try {
+        if (method === "POST" && form) {
+            bodyFile = createTempFile(
+                "bi-rate-form",
+                new URLSearchParams(form).toString()
+            );
+            args.push(
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/x-www-form-urlencoded",
+                "--data-binary",
+                `@${bodyFile}`
+            );
+        }
+
+        args.push(url);
+
+        return execFileSync(curlCommand, args, {
+            encoding: "utf8",
+            maxBuffer: CURL_MAX_BUFFER,
+        });
+    } finally {
+        if (bodyFile) {
+            try {
+                fs.unlinkSync(bodyFile);
+            } catch (_) {
+                // ignore temp cleanup error
+            }
         }
     }
 }
 
-function scrapeFromHtml(html, { preferIndoDate = true } = {}) {
-    const $ = cheerio.load(html);
+async function requestHtml({
+    session,
+    url,
+    method = "GET",
+    form = null,
+    tries = 3,
+}) {
+    let lastError;
 
-    // Cari tabel yang mengandung header BI-Rate + Tanggal/Period
+    for (let attempt = 1; attempt <= tries; attempt += 1) {
+        try {
+            const response = await session.client.request({
+                method,
+                url,
+                headers: {
+                    ...DEFAULT_HEADERS,
+                    ...(method === "POST"
+                        ? {
+                              "Content-Type":
+                                  "application/x-www-form-urlencoded",
+                          }
+                        : {}),
+                    ...(session.cookieHeader
+                        ? { Cookie: session.cookieHeader }
+                        : {}),
+                },
+                data:
+                    method === "POST" && form
+                        ? new URLSearchParams(form).toString()
+                        : undefined,
+                responseType: "text",
+            });
+
+            session.cookieHeader = mergeCookieHeader(
+                session.cookieHeader,
+                response.headers?.["set-cookie"]
+            );
+
+            return response.data;
+        } catch (error) {
+            lastError = error;
+            if (attempt < tries) {
+                await sleep(500 * attempt);
+            }
+        }
+    }
+
+    if (lastError && isRetryableRequestError(lastError)) {
+        try {
+            return requestWithCurl({ session, url, method, form });
+        } catch (curlError) {
+            curlError.original = lastError.message;
+            throw curlError;
+        }
+    }
+
+    throw lastError;
+}
+
+function getBiRateTable($) {
     let table = $("table")
         .filter((_, el) => {
             const text = $(el).text();
-            return (
-                text.includes("BI-Rate") &&
-                (text.includes("Tanggal") || text.includes("Period"))
-            );
+            return text.includes("BI-Rate") && text.includes("Tanggal");
         })
         .first();
 
     if (!table.length) {
-        // fallback: ambil table pertama kalau BI ubah struktur
         table = $("table").first();
+    }
+
+    return table;
+}
+
+function scrapeFromHtml(html) {
+    const $ = cheerio.load(html);
+    const table = getBiRateTable($);
+
+    if (!table.length) {
+        throw new Error("Tabel BI-Rate tidak ditemukan pada halaman BI.");
     }
 
     let rows = table.find("tbody tr");
     if (!rows.length) rows = table.find("tr").slice(1);
 
     const items = [];
+
     rows.each((_, row) => {
-        // BI kadang punya TH di dalam row, jadi ambil td + th
         const cells = $(row).find("td, th");
-        if (cells.length < 3) return;
+        if (cells.length < 4) return;
 
-        // Ambil teks tiap kolom
-        const c0 = cells.eq(0).text().trim(); // No
-        const c1 = cells.eq(1).text().trim(); // Tanggal
-        const c2 = cells.eq(2).text().trim(); // BI-Rate
+        const rawDate = cells.eq(1).text().trim();
+        const rawRate = cells.eq(2).text().trim();
+        const linkHref = $(row).find("a").first().attr("href");
 
-        // Link: cari anchor "Lihat" dalam row (bukan tergantung eq(3))
-        const a = $(row).find("a").first();
-        const linkHref = a && a.attr("href") ? a.attr("href") : null;
-        const link = normalizeUrl(linkHref);
-
-        // Guard: pastikan c2 itu beneran rate (mengandung % / angka)
-        const looksLikeRate = /%/.test(c2) || /\d/.test(c2);
-        const looksLikeDate = /\d{1,2}\s+[A-Za-zÀ-ÿ]+\s+\d{4}/.test(c1) || /\d{1,2}\s+\w+\s+\d{4}/.test(c1);
+        const looksLikeRate = /%/.test(rawRate) || /\d/.test(rawRate);
+        const looksLikeDate =
+            /\d{1,2}\s+[A-Za-z]+\s+\d{4}/.test(rawDate) ||
+            /\d{1,2}\/\d{1,2}\/\d{4}/.test(rawDate);
 
         if (!looksLikeRate || !looksLikeDate) return;
 
-        const isoDate = parseIndoDate(c1);
-        const rate = Number(c2.replace("%", "").replace(",", ".").trim());
+        const rate = Number(rawRate.replace("%", "").replace(",", ".").trim());
 
         items.push({
-            date: isoDate || c1,
-            rate: Number.isFinite(rate) ? rate : c2,
-            press_release_url: link,
-            raw_date: c1,
-            raw_rate: c2,
+            date: parseIndoDate(rawDate) || rawDate,
+            rate: Number.isFinite(rate) ? rate : rawRate,
+            press_release_url: normalizeUrl(linkHref),
+            raw_date: rawDate,
+            raw_rate: rawRate,
         });
     });
 
@@ -127,100 +304,107 @@ function scrapeFromHtml(html, { preferIndoDate = true } = {}) {
     return items;
 }
 
-async function fetchBiRate({ from, to } = {}) {
-    // cache HIT
-    const now = Date.now();
+function getHiddenFieldValue($, name) {
+    return $(`input[name="${name}"]`).attr("value") || "";
+}
+
+function getNextPagerName(html) {
+    const $ = cheerio.load(html);
+    return (
+        $('span[id$="DataPagerBI7DRR"] input.next:not([disabled])')
+            .first()
+            .attr("name") || null
+    );
+}
+
+function buildNextPageForm(html) {
+    const $ = cheerio.load(html);
+    const nextPagerName = getNextPagerName(html);
+
+    if (!nextPagerName) return null;
+
+    const dateStartName = $('input[id$="TextBoxDateStart"]').attr("name");
+    const dateStartHiddenName = $('input[id$="HiddenFieldDateFrom"]').attr(
+        "name"
+    );
+    const dateEndName = $('input[id$="TextBoxDateEnd"]').attr("name");
+    const dateEndHiddenName = $('input[id$="HiddenFieldDateTo"]').attr("name");
+
+    const form = {
+        __EVENTTARGET: "",
+        __EVENTARGUMENT: "",
+        __VIEWSTATE: getHiddenFieldValue($, "__VIEWSTATE"),
+        __VIEWSTATEGENERATOR: getHiddenFieldValue($, "__VIEWSTATEGENERATOR"),
+        __EVENTVALIDATION: getHiddenFieldValue($, "__EVENTVALIDATION"),
+        [`${nextPagerName}.x`]: "10",
+        [`${nextPagerName}.y`]: "10",
+    };
+
+    if (dateStartName) form[dateStartName] = "";
+    if (dateStartHiddenName) form[dateStartHiddenName] = "";
+    if (dateEndName) form[dateEndName] = "";
+    if (dateEndHiddenName) form[dateEndHiddenName] = "";
+
+    return form;
+}
+
+async function fetchPagedBiRate(url) {
+    const session = createRequestSession();
+
     try {
-        const cached = await getCache(CACHE_KEY);
-        if (cached && cached.fetched_at) {
-            const fetchedAt = Date.parse(cached.fetched_at);
-            if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
-                const filtered = filterByDate(cached.payload?.data || [], { from, to });
-                return {
-                    source: cached.payload?.source,
-                    count: filtered.length,
-                    data: filtered,
-                    fetched_at: cached.fetched_at,
-                    cache: "HIT_DB",
-                };
+        let html = await requestHtml({
+            session,
+            url,
+            method: "GET",
+            tries: 3,
+        });
+
+        const items = [];
+        const seen = new Set();
+        const seenPages = new Set();
+
+        for (let pageIndex = 1; pageIndex <= MAX_PAGE_COUNT; pageIndex += 1) {
+            const pageItems = scrapeFromHtml(html);
+            const pageSignature = pageItems
+                .map((item) => `${item.raw_date}|${item.raw_rate}`)
+                .join("||");
+
+            if (!pageSignature || seenPages.has(pageSignature)) {
+                break;
             }
-        }
-    } catch (e) {
-        console.error("Gagal membaca cache DB BI Rate:", e.message);
-    }
-    if (cache.payload && now - cache.fetchedAt < CACHE_TTL_MS) {
-        const filtered = filterByDate(cache.payload.data, { from, to });
-        return {
-            ...cache.payload,
-            count: filtered.length,
-            data: filtered,
-            cache: "HIT",
-        };
-    }
+            seenPages.add(pageSignature);
 
-    // 1) coba halaman ID dulu
-    let html, source;
-    try {
-        html = await axiosGetWithRetry(BI_RATE_URL_ID, 3);
-        source = BI_RATE_URL_ID;
-        const items = scrapeFromHtml(html, { preferIndoDate: true });
-        const filtered = filterByDate(items, { from, to });
-
-        const payload = {
-            source,
-            count: filtered.length,
-            data: filtered,
-            fetched_at: new Date().toISOString(),
-        };
-
-        cache = { fetchedAt: now, payload: { source, data: items, fetched_at: payload.fetched_at } };
-
-        try {
-            await setCache(CACHE_KEY, payload, payload.fetched_at);
-        } catch (e) {
-            console.error("Gagal menulis cache DB BI Rate:", e.message);
-        }
-
-        return { ...payload, cache: "MISS" };
-    } catch (e) {
-        // 2) fallback ke halaman EN (kadang ID nge-reset)
-        try {
-            html = await axiosGetWithRetry(BI_RATE_URL_EN, 3);
-            source = BI_RATE_URL_EN;
-
-            const items = scrapeFromHtml(html, { preferIndoDate: false });
-            const normalized = normalizeEnDates(items); // ubah "19 February 2026" -> "2026-02-19" kalau bisa
-            const filtered = filterByDate(normalized, { from, to });
-
-            const payload = {
-                source,
-                count: filtered.length,
-                data: filtered,
-                fetched_at: new Date().toISOString(),
-            };
-
-            cache = { fetchedAt: now, payload: { source, data: normalized, fetched_at: payload.fetched_at } };
-
-            try {
-                await setCache(CACHE_KEY, payload, payload.fetched_at);
-            } catch (e) {
-                console.error("Gagal menulis cache DB BI Rate:", e.message);
+            for (const item of pageItems) {
+                const key = `${item.raw_date}|${item.raw_rate}|${item.press_release_url || ""}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                items.push(item);
             }
 
-            return { ...payload, cache: "MISS_FALLBACK_EN" };
-        } catch (e2) {
-            // lempar yang lebih informatif
-            const msg = e2.message || e.message || "Unknown error";
-            const err = new Error(msg);
-            err.original = { id: e.message, en: e2.message };
-            throw err;
+            const nextForm = buildNextPageForm(html);
+            if (!nextForm) break;
+
+            html = await requestHtml({
+                session,
+                url,
+                method: "POST",
+                form: nextForm,
+                tries: 3,
+            });
         }
+
+        if (!items.length) {
+            throw new Error("Histori BI-Rate kosong setelah pagination selesai.");
+        }
+
+        return items;
+    } finally {
+        cleanupRequestSession(session);
     }
 }
 
 function filterByDate(items, { from, to }) {
     return items.filter((item) => {
-        // kalau date belum ISO, skip filter
         if (!item.date || item.date.length !== 10) return true;
         if (from && item.date < from) return false;
         if (to && item.date > to) return false;
@@ -228,7 +412,6 @@ function filterByDate(items, { from, to }) {
     });
 }
 
-// convert EN month names to ISO if possible
 function normalizeEnDates(items) {
     const months = {
         january: "01",
@@ -245,19 +428,130 @@ function normalizeEnDates(items) {
         december: "12",
     };
 
-    return items.map((it) => {
-        const t = (it.raw_date || it.date || "").replace(/\s+/g, " ").trim();
-        // "19 February 2026"
-        const m = t.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
-        if (!m) return it;
+    return items.map((item) => {
+        const text = (item.raw_date || item.date || "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const match = text.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
 
-        const day = m[1].padStart(2, "0");
-        const mon = months[m[2].toLowerCase()];
-        const year = m[3];
+        if (!match) return item;
 
-        if (!mon) return it;
-        return { ...it, date: `${year}-${mon}-${day}` };
+        const day = match[1].padStart(2, "0");
+        const month = months[match[2].toLowerCase()];
+        const year = match[3];
+
+        if (!month) return item;
+        return { ...item, date: `${year}-${month}-${day}` };
     });
+}
+
+async function fetchBiRate({ from, to } = {}) {
+    const now = Date.now();
+
+    try {
+        const cached = await getCache(CACHE_KEY);
+        if (cached && cached.fetched_at) {
+            const fetchedAt = Date.parse(cached.fetched_at);
+            if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                const filtered = filterByDate(cached.payload?.data || [], {
+                    from,
+                    to,
+                });
+                return {
+                    source: cached.payload?.source,
+                    count: filtered.length,
+                    data: filtered,
+                    fetched_at: cached.fetched_at,
+                    cache: "HIT_DB",
+                };
+            }
+        }
+    } catch (error) {
+        console.error("Gagal membaca cache DB BI Rate:", error.message);
+    }
+
+    if (cache.payload && now - cache.fetchedAt < CACHE_TTL_MS) {
+        const filtered = filterByDate(cache.payload.data, { from, to });
+        return {
+            ...cache.payload,
+            count: filtered.length,
+            data: filtered,
+            cache: "HIT",
+        };
+    }
+
+    try {
+        const items = await fetchPagedBiRate(BI_RATE_URL_ID);
+        const filtered = filterByDate(items, { from, to });
+        const fetchedAt = new Date().toISOString();
+        const cachePayload = {
+            source: BI_RATE_URL_ID,
+            count: items.length,
+            data: items,
+            fetched_at: fetchedAt,
+        };
+
+        const payload = {
+            source: BI_RATE_URL_ID,
+            count: filtered.length,
+            data: filtered,
+            fetched_at: fetchedAt,
+        };
+
+        cache = {
+            fetchedAt: now,
+            payload: cachePayload,
+        };
+
+        try {
+            await setCache(CACHE_KEY, cachePayload, payload.fetched_at);
+        } catch (error) {
+            console.error("Gagal menulis cache DB BI Rate:", error.message);
+        }
+
+        return { ...payload, cache: "MISS" };
+    } catch (idError) {
+        try {
+            const items = normalizeEnDates(await fetchPagedBiRate(BI_RATE_URL_EN));
+            const filtered = filterByDate(items, { from, to });
+            const fetchedAt = new Date().toISOString();
+            const cachePayload = {
+                source: BI_RATE_URL_EN,
+                count: items.length,
+                data: items,
+                fetched_at: fetchedAt,
+            };
+
+            const payload = {
+                source: BI_RATE_URL_EN,
+                count: filtered.length,
+                data: filtered,
+                fetched_at: fetchedAt,
+            };
+
+            cache = {
+                fetchedAt: now,
+                payload: cachePayload,
+            };
+
+            try {
+                await setCache(CACHE_KEY, cachePayload, payload.fetched_at);
+            } catch (error) {
+                console.error("Gagal menulis cache DB BI Rate:", error.message);
+            }
+
+            return { ...payload, cache: "MISS_FALLBACK_EN" };
+        } catch (enError) {
+            const error = new Error(
+                enError.message || idError.message || "Unknown error"
+            );
+            error.original = {
+                id: idError.message,
+                en: enError.message,
+            };
+            throw error;
+        }
+    }
 }
 
 module.exports = {

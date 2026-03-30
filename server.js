@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const morgan = require("morgan");
 const cronRouter = require("./routes/cron");
+const biRateRouter = require("./routes/biRate");
 const fxRouter = require("./routes/fx");
 const investingBcaRouter = require("./routes/investingBca");
 const investingRouter = require("./routes/investing");
@@ -27,6 +28,8 @@ if (process.env.ENABLE_CRON === "true") {
 app.get("/", (req, res) => res.send("Express server running"));
 
 app.use("/api/newsmaker-v2/fx", fxRouter);
+app.use("/api/newsmaker-v2/bi-rate", biRateRouter);
+app.use("/api/newsmaker-v2/biRate", biRateRouter);
 app.use("/api/newsmaker-v2/investing/bca", investingBcaRouter);
 app.use("/api/newsmaker-v2/investing", investingRouter);
 app.use("/api/newsmaker-v2/pricecharting", pricechartingRouter);
