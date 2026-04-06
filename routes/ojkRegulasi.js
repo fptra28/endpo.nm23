@@ -4,6 +4,18 @@ const { fetchOjkRegulasi } = require("../services/ojkRegulasiScraper");
 
 const router = express.Router();
 
+router.get("/", (req, res) => {
+    res.json({
+        message: "Gunakan endpoint GET /api/newsmaker-v2/ojk/regulasi",
+        endpoint: "/api/newsmaker-v2/ojk/regulasi",
+        query: {
+            page: "number (optional)",
+            max_pages: "number (optional)",
+            nocache: "1 untuk bypass cache (optional)",
+        },
+    });
+});
+
 /**
  * GET /ojk/regulasi
  * Optional: ?page=1 or ?max_pages=1 or ?nocache=1

@@ -5,7 +5,8 @@ const http = require("http");
 const https = require("https");
 const { getCache, setCache } = require("./cacheStore");
 
-const BASE_URL = "https://ojk.go.id/id/regulasi/default.aspx";
+const BASE_URL =
+    process.env.OJK_REGULASI_URL || "https://ojk.go.id/id/regulasi/olddefault.aspx";
 
 const CACHE_TTL_MS = Number(process.env.OJK_REGULASI_CACHE_TTL_MS || 6 * 60 * 60 * 1000);
 const CACHE_KEY = "ojk_regulasi";
@@ -15,23 +16,64 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 
 let cache = { at: 0, payload: null };
 
+const DEFAULT_HEADERS = {
+    "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    Connection: "keep-alive",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+};
+
 function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
-async function axiosGetWithRetry(url, tries = 3) {
+function mergeCookieHeader(currentHeader, setCookieHeader) {
+    const cookies = new Map();
+
+    for (const pair of String(currentHeader || "").split(/;\s*/)) {
+        if (!pair) continue;
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(
+            pair.slice(0, separatorIndex),
+            pair.slice(separatorIndex + 1)
+        );
+    }
+
+    const newCookies = Array.isArray(setCookieHeader)
+        ? setCookieHeader
+        : setCookieHeader
+          ? [setCookieHeader]
+          : [];
+
+    for (const rawCookie of newCookies) {
+        const pair = String(rawCookie).split(";")[0].trim();
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(
+            pair.slice(0, separatorIndex),
+            pair.slice(separatorIndex + 1)
+        );
+    }
+
+    return Array.from(cookies.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; ");
+}
+
+async function axiosGetWithRetry(url, session, tries = 3) {
     let lastErr;
     for (let i = 1; i <= tries; i++) {
         try {
             const res = await axios.get(url, {
                 headers: {
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-                    Connection: "keep-alive",
-                    "Cache-Control": "no-cache",
-                    Pragma: "no-cache",
+                    ...DEFAULT_HEADERS,
+                    ...(session?.cookieHeader
+                        ? { Cookie: session.cookieHeader }
+                        : {}),
                 },
                 timeout: 20000,
                 httpAgent,
@@ -40,6 +82,12 @@ async function axiosGetWithRetry(url, tries = 3) {
                 maxRedirects: 5,
                 validateStatus: (s) => s >= 200 && s < 400,
             });
+            if (session) {
+                session.cookieHeader = mergeCookieHeader(
+                    session.cookieHeader,
+                    res.headers?.["set-cookie"]
+                );
+            }
             return res.data;
         } catch (err) {
             lastErr = err;
@@ -49,22 +97,19 @@ async function axiosGetWithRetry(url, tries = 3) {
     }
 }
 
-async function axiosPostWithRetry(url, body, tries = 3) {
+async function axiosPostWithRetry(url, body, session, tries = 3) {
     let lastErr;
     for (let i = 1; i <= tries; i++) {
         try {
             const res = await axios.post(url, body, {
                 headers: {
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-                    Connection: "keep-alive",
-                    "Cache-Control": "no-cache",
-                    Pragma: "no-cache",
+                    ...DEFAULT_HEADERS,
                     "Content-Type": "application/x-www-form-urlencoded",
                     Origin: "https://ojk.go.id",
                     Referer: BASE_URL,
+                    ...(session?.cookieHeader
+                        ? { Cookie: session.cookieHeader }
+                        : {}),
                 },
                 timeout: 20000,
                 httpAgent,
@@ -73,6 +118,12 @@ async function axiosPostWithRetry(url, body, tries = 3) {
                 maxRedirects: 5,
                 validateStatus: (s) => s >= 200 && s < 400,
             });
+            if (session) {
+                session.cookieHeader = mergeCookieHeader(
+                    session.cookieHeader,
+                    res.headers?.["set-cookie"]
+                );
+            }
             return res.data;
         } catch (err) {
             lastErr = err;
@@ -151,7 +202,9 @@ function extractFormFields($) {
 }
 
 function extractPager($) {
-    const pager = $("#ctl00_PlaceHolderMain_ctl01_DataPagerArticles");
+    const pager = $(
+        "#ctl00_PlaceHolderMain_ctl01_DataPagerArticles, #ctl00_PlaceHolderMain_ctl00_DataPagerArticles"
+    ).first();
     if (!pager.length) {
         return { current: 1, pages: new Map(), nextTarget: null, prevTarget: null };
     }
@@ -160,7 +213,7 @@ function extractPager($) {
     let nextTarget = null;
     let prevTarget = null;
 
-    pager.find("a.pagingButton").each((_, el) => {
+    pager.find("a").each((_, el) => {
         const $el = $(el);
         const text = cleanText($el.text());
         const href = $el.attr("href") || "";
@@ -171,6 +224,15 @@ function extractPager($) {
         if (/^\d+$/.test(text)) {
             pages.set(Number(text), target);
         }
+        if (text === "...") {
+            nextTarget = target;
+        }
+        if (/^Last$/i.test(text)) {
+            nextTarget = target;
+        }
+        if (/^First$/i.test(text)) {
+            prevTarget = target;
+        }
         if ($el.hasClass("fa-arrow-right")) {
             nextTarget = target;
         }
@@ -179,13 +241,68 @@ function extractPager($) {
         }
     });
 
-    const currentText = cleanText(pager.find("span.currentPagingButton").first().text());
+    const currentText = cleanText(
+        pager
+            .find("span.currentPagingButton, span.disabledbluebutton, .currentPagingButton")
+            .first()
+            .text()
+    );
     const current = /^\d+$/.test(currentText) ? Number(currentText) : 1;
+
+    if (!nextTarget && pages.has(current + 1)) {
+        nextTarget = pages.get(current + 1);
+    }
+    if (!prevTarget && pages.has(current - 1)) {
+        prevTarget = pages.get(current - 1);
+    }
 
     return { current, pages, nextTarget, prevTarget };
 }
 
-function parseItems($) {
+function parseItemsOldTable($) {
+    const rows = $("table.table tbody tr").filter((_, row) => $(row).find("td").length >= 8);
+    if (!rows.length) {
+        return [];
+    }
+
+    const items = [];
+    rows.each((_, row) => {
+        const $row = $(row);
+        const tds = $row.find("td");
+
+        const titleEl = tds.eq(1).find("a").first();
+        const title = cleanText(titleEl.text()) || cleanText(tds.eq(1).text());
+        const href = titleEl.attr("href") || null;
+        const url = normalizeOjkUrl(href);
+        const deskripsi = cleanText(tds.eq(2).text());
+        const nomor = cleanText(tds.eq(3).text());
+        const sektor = cleanText(tds.eq(4).text());
+        const subSektor = cleanText(tds.eq(5).text());
+        const jenis = cleanText(tds.eq(6).text());
+        const tahunText = cleanText(tds.eq(7).text());
+        const tahunMatch = tahunText.match(/\b(19|20)\d{2}\b/);
+        const tahun = tahunMatch ? Number(tahunMatch[0]) : null;
+
+        if (!nomor && !title) return;
+
+        items.push({
+            nomor: nomor || null,
+            judul: title || null,
+            deskripsi: deskripsi || null,
+            url,
+            jenis: jenis || null,
+            sektor: sektor || null,
+            sub_sektor: subSektor || null,
+            tahun,
+            tahun_berlaku: tahunText || null,
+            raw_caption: null,
+        });
+    });
+
+    return items;
+}
+
+function parseItemsNewTable($) {
     const rows = $("table.table-styled tbody tr");
     if (!rows.length) {
         return [];
@@ -221,6 +338,14 @@ function parseItems($) {
     return items;
 }
 
+function parseItems($) {
+    const oldTableItems = parseItemsOldTable($);
+    if (oldTableItems.length) {
+        return oldTableItems;
+    }
+    return parseItemsNewTable($);
+}
+
 function parsePage(html) {
     const $ = cheerio.load(html);
     const items = parseItems($);
@@ -234,11 +359,11 @@ function isWafBlocked(html) {
     return /Request Rejected/i.test(html) && /support ID/i.test(html);
 }
 
-async function postBack(html, target) {
+async function postBack(html, target, session) {
     const { fields } = parsePage(html);
     const payload = { ...fields, __EVENTTARGET: target, __EVENTARGUMENT: "" };
     const body = new URLSearchParams(payload).toString();
-    const nextHtml = await axiosPostWithRetry(BASE_URL, body, 3);
+    const nextHtml = await axiosPostWithRetry(BASE_URL, body, session, 3);
     if (isWafBlocked(nextHtml)) {
         const err = new Error(
             "Pagination postback diblokir oleh WAF OJK. Saat ini hanya halaman pertama yang dapat di-scrape."
@@ -250,7 +375,8 @@ async function postBack(html, target) {
 }
 
 async function fetchPageByNumber(page) {
-    let html = await axiosGetWithRetry(BASE_URL, 3);
+    const session = { cookieHeader: "" };
+    let html = await axiosGetWithRetry(BASE_URL, session, 3);
     let { items, pager } = parsePage(html);
 
     if (page <= 1) {
@@ -264,11 +390,11 @@ async function fetchPageByNumber(page) {
     while (current !== page && guard < 200) {
         const prevCurrent = current;
         if (pager.pages.has(page)) {
-            html = await postBack(html, pager.pages.get(page));
+            html = await postBack(html, pager.pages.get(page), session);
         } else if (page > current && pager.nextTarget) {
-            html = await postBack(html, pager.nextTarget);
+            html = await postBack(html, pager.nextTarget, session);
         } else if (page < current && pager.prevTarget) {
-            html = await postBack(html, pager.prevTarget);
+            html = await postBack(html, pager.prevTarget, session);
         } else {
             break;
         }
@@ -290,14 +416,16 @@ async function fetchPageByNumber(page) {
 }
 
 async function fetchPagesSequential(maxPages) {
-    let html = await axiosGetWithRetry(BASE_URL, 3);
+    const session = { cookieHeader: "" };
+    let html = await axiosGetWithRetry(BASE_URL, session, 3);
     let parsed = parsePage(html);
     let items = parsed.items;
     let pager = parsed.pager;
     let pagesFetched = 1;
 
     while (pagesFetched < maxPages && pager.nextTarget) {
-        html = await postBack(html, pager.nextTarget);
+        const target = pager.pages.get((pager.current || 1) + 1) || pager.nextTarget;
+        html = await postBack(html, target, session);
         parsed = parsePage(html);
         items = items.concat(parsed.items);
         pager = parsed.pager;
