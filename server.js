@@ -9,6 +9,7 @@ const investingBcaRouter = require("./routes/investingBca");
 const investingRouter = require("./routes/investing");
 const pricechartingRouter = require("./routes/pricecharting");
 const ojkRegulasiRouter = require("./routes/ojkRegulasi");
+const bappebtiRouter = require("./routes/bappebti");
 const ratesRouter = require("./routes/rates");
 
 // Jangan start cron di Vercel serverless
@@ -34,6 +35,8 @@ app.use("/api/newsmaker-v2/investing/bca", investingBcaRouter);
 app.use("/api/newsmaker-v2/investing", investingRouter);
 app.use("/api/newsmaker-v2/pricecharting", pricechartingRouter);
 app.use("/api/newsmaker-v2/ojk", ojkRegulasiRouter);
+app.use("/api/newsmaker-v2/bappebti", bappebtiRouter);
+app.use("/api/newsmaker-v2/ojk/bappebti", bappebtiRouter);
 app.use("/api/newsmaker-v2/rates", ratesRouter);
 app.use("/cron", cronRouter);
 
