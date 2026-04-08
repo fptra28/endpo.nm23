@@ -11,6 +11,7 @@ const pricechartingRouter = require("./routes/pricecharting");
 const ojkRegulasiRouter = require("./routes/ojkRegulasi");
 const bappebtiRouter = require("./routes/bappebti");
 const ratesRouter = require("./routes/rates");
+const jfxRouter = require("./routes/jfx");
 
 // Jangan start cron di Vercel serverless
 // const { startCron } = require("./services/cron");
@@ -38,6 +39,7 @@ app.use("/api/newsmaker-v2/ojk", ojkRegulasiRouter);
 app.use("/api/newsmaker-v2/bappebti", bappebtiRouter);
 app.use("/api/newsmaker-v2/ojk/bappebti", bappebtiRouter);
 app.use("/api/newsmaker-v2/rates", ratesRouter);
+app.use("/api/newsmaker-v2/jfx", jfxRouter);
 app.use("/cron", cronRouter);
 
 app.listen(PORT, () => console.log(`Server berjalan di http://localhost:${PORT}`));
