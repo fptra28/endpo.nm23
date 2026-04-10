@@ -40,6 +40,8 @@ app.use("/api/newsmaker-v2/bappebti", bappebtiRouter);
 app.use("/api/newsmaker-v2/ojk/bappebti", bappebtiRouter);
 app.use("/api/newsmaker-v2/rates", ratesRouter);
 app.use("/api/newsmaker-v2/jfx", jfxRouter);
+// Alias: sebagian client masih pakai nama "bbj" untuk Bursa Berjangka Jakarta (JFX)
+app.use("/api/newsmaker-v2/bbj", jfxRouter);
 app.use("/cron", cronRouter);
 
 app.listen(PORT, () => console.log(`Server berjalan di http://localhost:${PORT}`));

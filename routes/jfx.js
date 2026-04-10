@@ -115,4 +115,18 @@ router.get("/volume/range", async (req, res) => {
     }
 });
 
+router.use((req, res) => {
+    res.status(404).json({
+        error: "Endpoint JFX tidak ditemukan",
+        message: "Cek path. Contoh: /api/newsmaker-v2/jfx/volume?month=4&year=2026",
+        path: req.originalUrl,
+        endpoints: {
+            volume: "/api/newsmaker-v2/jfx/volume?month=4&year=2026",
+            meta: "/api/newsmaker-v2/jfx/volume/meta",
+            year: "/api/newsmaker-v2/jfx/volume/year?year=2026",
+            range: "/api/newsmaker-v2/jfx/volume/range?from=2026-01&to=2026-04",
+        },
+    });
+});
+
 module.exports = router;
