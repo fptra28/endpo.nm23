@@ -26,6 +26,7 @@ const QUOTES = [
 ];
 
 const CACHE_KEY = "cnbc_quotes";
+const CACHE_KEY_BBCA = "cnbc_quote_bbca";
 
 function buildCnbcUrl(symbol) {
     const code = `${symbol}.JK`;
@@ -152,6 +153,14 @@ async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
 
     if (!bypassCache) {
         try {
+            const cachedSingle = await getCache(CACHE_KEY_BBCA);
+            if (cachedSingle && cachedSingle.fetched_at) {
+                const fetchedAt = Date.parse(cachedSingle.fetched_at);
+                if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                    return { ...cachedSingle.payload, cache: "HIT_DB" };
+                }
+            }
+
             const cached = await getCache(CACHE_KEY);
             if (cached && cached.fetched_at) {
                 const fetchedAt = Date.parse(cached.fetched_at);
@@ -185,6 +194,13 @@ async function fetchInvestingBcaCached({ bypassCache = false } = {}) {
 
     const payload = await fetchCnbcSingle({ symbol: "BBCA" });
     cache = { at: now, payload };
+
+    try {
+        await setCache(CACHE_KEY_BBCA, payload, payload.fetched_at);
+    } catch (e) {
+        // jangan blok request kalau gagal tulis DB
+        console.error("Gagal menulis cache DB CNBC (BBCA):", e.message);
+    }
     return { ...payload, cache: "MISS" };
 }
 

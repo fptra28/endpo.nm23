@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { fetchBiRate } = require("./scraper");
+const { getCache, setCache } = require("./cacheStore");
 const {
     fetchUsInterestRateCached,
     fetchJapanInterestRateCached,
@@ -8,7 +9,10 @@ const {
 } = require("./usInterestRateScraper");
 
 const SOURCE_TIMEOUT_MS = Number(process.env.RATES_SOURCE_TIMEOUT_MS || 25000);
+const CACHE_TTL_MS = Number(process.env.RATES_CACHE_TTL_MS || 60 * 1000);
+const CACHE_KEY = "rates_all";
 const BI_RATE_FALLBACK_PATH = path.join(__dirname, "..", "data", "bi_rate.json");
+let cache = { at: 0, payload: null };
 
 function isIsoDate(value) {
     return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
@@ -130,6 +134,26 @@ async function fetchBiRateWithFallback() {
 }
 
 async function fetchAllRates({ bypassCache = false } = {}) {
+    const now = Date.now();
+
+    if (!bypassCache) {
+        try {
+            const cached = await getCache(CACHE_KEY);
+            if (cached && cached.fetched_at) {
+                const fetchedAt = Date.parse(cached.fetched_at);
+                if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                    return { ...cached.payload, cache: "HIT_DB" };
+                }
+            }
+        } catch (error) {
+            console.error("Gagal membaca cache DB rates:", error.message);
+        }
+
+        if (cache.payload && now - cache.at < CACHE_TTL_MS) {
+            return { ...cache.payload, cache: "HIT" };
+        }
+    }
+
     const [biResult, usResult, japanResult, hongKongResult] = await Promise.allSettled([
         fetchBiRateWithFallback(),
         withTimeout(fetchUsInterestRateCached({ bypassCache }), "US interest rate"),
@@ -207,12 +231,22 @@ async function fetchAllRates({ bypassCache = false } = {}) {
         throw error;
     }
 
-    return {
+    const payload = {
         fetched_at: new Date().toISOString(),
         count: Object.keys(data).length,
         data,
         errors,
     };
+
+    cache = { at: now, payload };
+
+    try {
+        await setCache(CACHE_KEY, payload, payload.fetched_at);
+    } catch (error) {
+        console.error("Gagal menulis cache DB rates:", error.message);
+    }
+
+    return { ...payload, cache: bypassCache ? "BYPASS" : "MISS" };
 }
 
 module.exports = {
