@@ -76,6 +76,81 @@ function formatNumber(value, digits = 4) {
     return Number(value.toFixed(digits));
 }
 
+function resolveTimestampMs(value) {
+    if (Number.isFinite(value)) return Number(value);
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+
+    const parsed = Date.parse(String(value || ""));
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeMinuteCandle(raw) {
+    if (!raw || typeof raw !== "object") return null;
+
+    const open = Number(raw.open ?? raw.mid ?? raw.close);
+    const high = Number(raw.high ?? raw.ask ?? raw.mid ?? raw.close);
+    const low = Number(raw.low ?? raw.bid ?? raw.mid ?? raw.close);
+    const close = Number(raw.close ?? raw.mid);
+
+    if (![open, high, low, close].every((value) => Number.isFinite(value))) {
+        return null;
+    }
+
+    const sourceTs = resolveTimestampMs(raw.bucketTs ?? raw.ts ?? raw.timestamp ?? raw.updatedAt);
+    if (!Number.isFinite(sourceTs)) {
+        return null;
+    }
+
+    const bucketTs = Math.floor(sourceTs / 60000) * 60000;
+
+    return {
+        bucketTs,
+        timestamp: new Date(bucketTs).toISOString(),
+        updatedAt: new Date(sourceTs).toISOString(),
+        open,
+        high,
+        low,
+        close,
+        bid: Number.isFinite(Number(raw.bid)) ? Number(raw.bid) : close,
+        ask: Number.isFinite(Number(raw.ask)) ? Number(raw.ask) : close,
+        spread: Number.isFinite(Number(raw.spread)) ? Number(raw.spread) : null,
+        spreadProfile: raw.spreadProfile || null,
+        topo: raw.topo || null,
+    };
+}
+
+function sanitizeMinuteCandles(items) {
+    if (!Array.isArray(items)) return [];
+
+    const ordered = items
+        .map(normalizeMinuteCandle)
+        .filter(Boolean)
+        .sort((a, b) => a.bucketTs - b.bucketTs);
+
+    const deduped = [];
+
+    for (const candle of ordered) {
+        const last = deduped[deduped.length - 1];
+
+        if (last && last.bucketTs === candle.bucketTs) {
+            last.high = Math.max(last.high, candle.high);
+            last.low = Math.min(last.low, candle.low);
+            last.close = candle.close;
+            last.ask = candle.ask;
+            last.bid = candle.bid;
+            last.spread = candle.spread;
+            last.updatedAt = candle.updatedAt;
+            continue;
+        }
+
+        deduped.push(candle);
+    }
+
+    return deduped.slice(-MINUTE_HISTORY_LIMIT);
+}
+
 function sma(values, period) {
     if (values.length < period) return null;
     const window = values.slice(values.length - period);
@@ -451,9 +526,9 @@ async function loadMinuteHistory(symbol) {
     try {
         const cached = await getCache(key);
         const candles = Array.isArray(cached?.payload?.minuteCandles)
-            ? cached.payload.minuteCandles
+            ? sanitizeMinuteCandles(cached.payload.minuteCandles)
             : Array.isArray(cached?.payload?.samples)
-                ? cached.payload.samples
+                ? sanitizeMinuteCandles(cached.payload.samples)
                 : [];
 
         minuteHistoryMemory.set(key, candles);
