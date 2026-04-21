@@ -2,6 +2,7 @@ const cron = require("node-cron");
 const { fetchBiRate } = require("./scraper");
 const { fetchBiFxCached } = require("./biFxScraper");
 const { fetchInvestingMultipleCached } = require("./investingBcaScraper");
+const { collectSignalSnapshot } = require("./signalService");
 
 function startCron() {
     // jalan setiap hari jam 08:00 (Asia/Jakarta)
@@ -80,6 +81,32 @@ function startCron() {
                 console.log("CNBC market data updated");
             } catch (err) {
                 console.error("CNBC polling failed:", err.message);
+            } finally {
+                inFlight = false;
+            }
+        }, intervalMs);
+    }
+
+    if (process.env.SIGNAL_POLL_ENABLED === "true") {
+        const intervalSec = Number(process.env.SIGNAL_POLL_INTERVAL_SEC || 10);
+        const intervalMs = Math.max(1, intervalSec) * 1000;
+        const symbol = String(process.env.SIGNAL_SYMBOL || "XAUUSD").trim().toUpperCase();
+        const profile = String(process.env.SIGNAL_SWISSQUOTE_PROFILE || "premium")
+            .trim()
+            .toLowerCase();
+        let inFlight = false;
+
+        console.log(`Signal polling enabled: ${symbol} every ${intervalSec}s`);
+
+        setInterval(async () => {
+            if (inFlight) return;
+            inFlight = true;
+            try {
+                console.log(`Polling signal quote ${symbol}...`);
+                await collectSignalSnapshot({ symbol, profile });
+                console.log(`Signal quote ${symbol} updated`);
+            } catch (err) {
+                console.error("Signal polling failed:", err.message);
             } finally {
                 inFlight = false;
             }

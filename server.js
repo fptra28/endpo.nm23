@@ -12,6 +12,7 @@ const ojkRegulasiRouter = require("./routes/ojkRegulasi");
 const bappebtiRouter = require("./routes/bappebti");
 const ratesRouter = require("./routes/rates");
 const jfxRouter = require("./routes/jfx");
+const signalRouter = require("./routes/signal");
 
 // Jangan start cron di Vercel serverless
 // const { startCron } = require("./services/cron");
@@ -42,6 +43,7 @@ app.use("/api/newsmaker-v2/rates", ratesRouter);
 app.use("/api/newsmaker-v2/jfx", jfxRouter);
 // Alias: sebagian client masih pakai nama "bbj" untuk Bursa Berjangka Jakarta (JFX)
 app.use("/api/newsmaker-v2/bbj", jfxRouter);
+app.use("/api/newsmaker-v2/signal", signalRouter);
 app.use("/cron", cronRouter);
 
 app.listen(PORT, () => console.log(`Server berjalan di http://localhost:${PORT}`));

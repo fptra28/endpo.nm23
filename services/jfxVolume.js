@@ -250,6 +250,22 @@ function normalizeVolumePayload(remotePayload, { month, year }) {
     };
 }
 
+function asStalePayload(payload, fetchedAtMs, cacheTag) {
+    const safe = payload && typeof payload === "object" ? payload : null;
+    if (!safe) return null;
+
+    const staleFetchedAt =
+        safe.fetched_at ||
+        (Number.isFinite(fetchedAtMs) ? new Date(fetchedAtMs).toISOString() : null);
+
+    return {
+        ...safe,
+        fetched_at: staleFetchedAt,
+        cache: cacheTag,
+        stale: true,
+    };
+}
+
 function listMonthPairsInRange({ from, to }) {
     const matchFrom = String(from || "").match(/^(\d{4})-(\d{2})$/);
     const matchTo = String(to || "").match(/^(\d{4})-(\d{2})$/);
@@ -286,6 +302,8 @@ async function fetchJfxVolume({ month, year, bypassCache = false } = {}) {
     const ttlMs = getCacheTtlMsForMonthYear(normalized);
     const daily = requiresDailyRefresh(normalized);
 
+    let staleCandidate = null;
+
     if (!bypassCache) {
         const mem = memoryCache.get(key);
         if (mem && mem.payload && typeof mem.payload === "object") {
@@ -293,6 +311,7 @@ async function fetchJfxVolume({ month, year, bypassCache = false } = {}) {
             const ttlOk = now - payloadFetchedAtMs < ttlMs;
             const dailyOk = !daily || isSameJakartaDay(payloadFetchedAtMs, now);
             if (ttlOk && dailyOk) return { ...mem.payload, cache: "HIT" };
+            staleCandidate = asStalePayload(mem.payload, payloadFetchedAtMs, "STALE_MEM");
         }
 
         try {
@@ -309,15 +328,33 @@ async function fetchJfxVolume({ month, year, bypassCache = false } = {}) {
                         }
                     }
                 }
+
+                const payload = cached.payload || null;
+                if (payload && typeof payload === "object" && !staleCandidate) {
+                    staleCandidate = asStalePayload(payload, fetchedAt, "STALE_DB");
+                }
             }
         } catch (error) {
             console.error("Gagal membaca cache DB JFX:", error.message);
         }
     }
 
-    const session = await createJfxSession();
-    const remote = await fetchRemoteVolumeWithSession(session, normalized);
-    const payload = normalizeVolumePayload(remote, normalized);
+    let payload;
+
+    try {
+        const session = await createJfxSession();
+        const remote = await fetchRemoteVolumeWithSession(session, normalized);
+        payload = normalizeVolumePayload(remote, normalized);
+    } catch (error) {
+        if (staleCandidate) {
+            return {
+                ...staleCandidate,
+                error: "Gagal refresh data volume (mengembalikan cache lama)",
+                detail: error?.detail || null,
+            };
+        }
+        throw error;
+    }
 
     memoryCache.set(key, { fetchedAt: getPayloadFetchedAtMs(payload, now), payload });
 
