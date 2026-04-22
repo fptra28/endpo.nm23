@@ -1,10 +1,20 @@
 const express = require("express");
-const { fetchSignalCached } = require("../services/signalService");
+const { fetchSignalCached, fetchSignalsBatch } = require("../services/signalService");
 
 const router = express.Router();
 
 router.get("/", async (req, res) => {
     try {
+        if (req.query.symbols) {
+            const result = await fetchSignalsBatch({
+                symbols: req.query.symbols,
+                interval: req.query.interval,
+                profile: req.query.profile,
+            });
+
+            return res.json(result);
+        }
+
         const result = await fetchSignalCached({
             symbol: req.query.symbol,
             interval: req.query.interval,

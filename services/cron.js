@@ -2,7 +2,7 @@ const cron = require("node-cron");
 const { fetchBiRate } = require("./scraper");
 const { fetchBiFxCached } = require("./biFxScraper");
 const { fetchInvestingMultipleCached } = require("./investingBcaScraper");
-const { collectSignalSnapshot } = require("./signalService");
+const { collectSignalSnapshot, parseSignalSymbolsInput } = require("./signalService");
 
 function startCron() {
     // jalan setiap hari jam 08:00 (Asia/Jakarta)
@@ -90,21 +90,42 @@ function startCron() {
     if (process.env.SIGNAL_POLL_ENABLED === "true") {
         const intervalSec = Number(process.env.SIGNAL_POLL_INTERVAL_SEC || 10);
         const intervalMs = Math.max(1, intervalSec) * 1000;
-        const symbol = String(process.env.SIGNAL_SYMBOL || "XAUUSD").trim().toUpperCase();
+        const symbols = parseSignalSymbolsInput(
+            process.env.SIGNAL_SYMBOLS || process.env.SIGNAL_SYMBOL || "XAUUSD",
+            {
+                skipInvalid: true,
+                fallbackToDefault: true,
+                onInvalid: (symbol, error) => {
+                    console.error(`Signal symbol di-skip (${symbol}): ${error.message}`);
+                },
+            }
+        );
         const profile = String(process.env.SIGNAL_SWISSQUOTE_PROFILE || "premium")
             .trim()
             .toLowerCase();
         let inFlight = false;
 
-        console.log(`Signal polling enabled: ${symbol} every ${intervalSec}s`);
+        console.log(`Signal polling enabled: ${symbols.join(", ")} every ${intervalSec}s`);
 
         setInterval(async () => {
             if (inFlight) return;
             inFlight = true;
             try {
-                console.log(`Polling signal quote ${symbol}...`);
-                await collectSignalSnapshot({ symbol, profile });
-                console.log(`Signal quote ${symbol} updated`);
+                const results = await Promise.allSettled(
+                    symbols.map(async (symbol) => {
+                        console.log(`Polling signal quote ${symbol}...`);
+                        await collectSignalSnapshot({ symbol, profile });
+                        console.log(`Signal quote ${symbol} updated`);
+                    })
+                );
+
+                results.forEach((result, index) => {
+                    if (result.status === "fulfilled") return;
+                    console.error(
+                        `Signal polling failed for ${symbols[index]}:`,
+                        result.reason?.message || result.reason
+                    );
+                });
             } catch (err) {
                 console.error("Signal polling failed:", err.message);
             } finally {

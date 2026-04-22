@@ -15,30 +15,130 @@ const MIN_CANDLES_REQUIRED = Math.max(
 const DEFAULT_PROFILE = String(process.env.SIGNAL_SWISSQUOTE_PROFILE || "premium")
     .trim()
     .toLowerCase();
+const DEFAULT_SIGNAL_SYMBOL = "XAUUSD";
 const SIGNAL_ERROR_CODES = {
     INSUFFICIENT_CANDLE_HISTORY: "SIGNAL_INSUFFICIENT_CANDLE_HISTORY",
     SOURCE_METHOD_DIFFERENCE: "SIGNAL_SOURCE_METHOD_DIFFERENCE",
 };
+const SIGNAL_SYMBOL_ALIASES = {
+    XTIUSD: {
+        symbol: "XTIUSD",
+        fromSymbol: "OIL",
+        toSymbol: "USD",
+        providerSymbol: "OILUSD",
+    },
+    OILUSD: {
+        symbol: "XTIUSD",
+        fromSymbol: "OIL",
+        toSymbol: "USD",
+        providerSymbol: "OILUSD",
+    },
+    XBRUSD: {
+        symbol: "XBRUSD",
+        fromSymbol: "LCO",
+        toSymbol: "USD",
+        providerSymbol: "LCOUSD",
+    },
+    LCOUSD: {
+        symbol: "XBRUSD",
+        fromSymbol: "LCO",
+        toSymbol: "USD",
+        providerSymbol: "LCOUSD",
+    },
+};
+const UNSUPPORTED_SIGNAL_SYMBOLS = {
+    "#NAS100": "Symbol #NAS100 belum tersedia di Swissquote public feed yang dipakai service ini.",
+    NAS100: "Symbol #NAS100 belum tersedia di Swissquote public feed yang dipakai service ini.",
+};
 
 const minuteHistoryMemory = new Map();
 
-function normalizeSymbol(symbol) {
-    const raw = String(symbol || process.env.SIGNAL_SYMBOL || "XAUUSD")
+function sanitizeSignalSymbolInput(symbol) {
+    return String(symbol || "")
         .trim()
-        .toUpperCase();
+        .toUpperCase()
+        .replace(/\s+/g, "");
+}
+
+function normalizeSymbol(symbol) {
+    const raw = sanitizeSignalSymbolInput(
+        symbol || process.env.SIGNAL_SYMBOL || DEFAULT_SIGNAL_SYMBOL
+    );
+
+    if (!raw) {
+        const error = new Error("Symbol tidak boleh kosong.");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const unsupportedMessage = UNSUPPORTED_SIGNAL_SYMBOLS[raw];
+    if (unsupportedMessage) {
+        const error = new Error(unsupportedMessage);
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const aliased = SIGNAL_SYMBOL_ALIASES[raw];
+    if (aliased) {
+        return {
+            requestedSymbol: raw,
+            ...aliased,
+        };
+    }
+
     const compact = raw.replace(/[^A-Z]/g, "");
 
     if (!/^[A-Z]{6}$/.test(compact)) {
-        const error = new Error("Symbol harus format 6 huruf, misalnya XAUUSD atau EURUSD.");
+        const error = new Error(
+            "Symbol harus format 6 huruf, misalnya XAUUSD atau EURUSD. Untuk oil gunakan XTIUSD/XBRUSD."
+        );
         error.statusCode = 400;
         throw error;
     }
 
     return {
+        requestedSymbol: raw,
         symbol: compact,
         fromSymbol: compact.slice(0, 3),
         toSymbol: compact.slice(3, 6),
+        providerSymbol: compact,
     };
+}
+
+function parseSignalSymbolsInput(
+    symbols,
+    { skipInvalid = false, fallbackToDefault = true, onInvalid } = {}
+) {
+    const source =
+        symbols ?? process.env.SIGNAL_SYMBOLS ?? process.env.SIGNAL_SYMBOL ?? DEFAULT_SIGNAL_SYMBOL;
+    const rawItems = Array.isArray(source) ? source : String(source).split(",");
+    const resolved = [];
+    const seen = new Set();
+
+    for (const item of rawItems) {
+        const token = sanitizeSignalSymbolInput(item);
+        if (!token) continue;
+
+        try {
+            const normalized = normalizeSymbol(token);
+            if (seen.has(normalized.symbol)) continue;
+            seen.add(normalized.symbol);
+            resolved.push(normalized.symbol);
+        } catch (error) {
+            if (typeof onInvalid === "function") onInvalid(token, error);
+            if (!skipInvalid) throw error;
+        }
+    }
+
+    if (resolved.length) {
+        return resolved;
+    }
+
+    if (!fallbackToDefault) {
+        return [];
+    }
+
+    return [normalizeSymbol(DEFAULT_SIGNAL_SYMBOL).symbol];
 }
 
 function normalizeInterval(interval) {
@@ -647,6 +747,22 @@ function buildIndicatorSections({
     };
 }
 
+function buildIndicatorDetails({
+    oscillatorIndicators = [],
+    movingAverageIndicators = [],
+}) {
+    return {
+        oscillators: {
+            label: "Oscillators",
+            indicators: oscillatorIndicators,
+        },
+        movingAverages: {
+            label: "Moving Averages",
+            indicators: movingAverageIndicators,
+        },
+    };
+}
+
 function formatActionLabel(signal) {
     const normalized = String(signal || "NEUTRAL").toUpperCase();
 
@@ -860,8 +976,14 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
         sell: 0,
         neutral: 0,
     };
+    const candleStats = buildCandleStats({
+        interval,
+        minuteCandles,
+        candles,
+    });
 
     return {
+        candleStats,
         oscillatorSummary: {
             summary: "NEUTRAL",
             detail: emptyVotes,
@@ -887,8 +1009,26 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
                 total: 0,
             },
         }).summary,
+        indicatorDetails: buildIndicatorDetails({
+            oscillatorIndicators: [],
+            movingAverageIndicators: [],
+        }),
         errorCode: SIGNAL_ERROR_CODES.INSUFFICIENT_CANDLE_HISTORY,
         note: `Data historis tidak mencukupi untuk menghitung indikator. Diperlukan minimal ${MIN_CANDLES_REQUIRED} candle agar analisis dapat ditampilkan dengan benar. Hasil mungkin kosong atau tidak akurat hingga data terpenuhi.`,
+    };
+}
+
+function buildCandleStats({ interval, minuteCandles, candles }) {
+    const available = Array.isArray(candles) ? candles.length : 0;
+    const required = MIN_CANDLES_REQUIRED;
+
+    return {
+        interval,
+        available,
+        required,
+        missing: Math.max(required - available, 0),
+        isSufficient: available >= required,
+        minuteHistoryCount: Array.isArray(minuteCandles) ? minuteCandles.length : 0,
     };
 }
 
@@ -1336,8 +1476,14 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
         detail: movingAverageVotes,
         total: movingAverageIndicators.length,
     };
+    const candleStats = buildCandleStats({
+        interval,
+        minuteCandles,
+        candles,
+    });
 
     return {
+        candleStats,
         oscillatorSummary: oscillatorSummaryValue,
         movingAverageSummary: movingAverageSummaryValue,
         summary: buildIndicatorSections({
@@ -1349,6 +1495,10 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
             oscillatorIndicators,
             movingAverageIndicators,
         }).summary,
+        indicatorDetails: buildIndicatorDetails({
+            oscillatorIndicators,
+            movingAverageIndicators,
+        }),
         errorCode: SIGNAL_ERROR_CODES.SOURCE_METHOD_DIFFERENCE,
         note: "Hasil bisa sedikit berbeda atau terlihat error dibanding TradingView karena sumber feed berbeda, candle dibentuk dari agregasi quote, dan VWMA memakai tick volume proxy dari jumlah update quote.",
     };
@@ -1373,7 +1523,63 @@ async function fetchSignalCached({ symbol, interval, profile } = {}) {
     });
 }
 
+async function fetchSignalsBatch({ symbols, interval, profile } = {}) {
+    const normalizedInterval = normalizeInterval(interval);
+    const invalidSymbols = [];
+    const symbolList = parseSignalSymbolsInput(symbols, {
+        skipInvalid: true,
+        fallbackToDefault: !symbols,
+        onInvalid: (symbolValue, error) => {
+            invalidSymbols.push({
+                symbol: symbolValue,
+                message: error.message,
+                errorCode: error.errorCode || null,
+            });
+        },
+    });
+
+    const settled = await Promise.allSettled(
+        symbolList.map((symbolValue) =>
+            fetchSignalCached({
+                symbol: symbolValue,
+                interval: normalizedInterval,
+                profile,
+            })
+        )
+    );
+
+    const data = [];
+    const errors = [...invalidSymbols];
+
+    settled.forEach((result, index) => {
+        const symbolValue = symbolList[index];
+
+        if (result.status === "fulfilled") {
+            data.push({
+                symbol: symbolValue,
+                ...result.value,
+            });
+            return;
+        }
+
+        errors.push({
+            symbol: symbolValue,
+            message: result.reason?.message || "Gagal ambil signal.",
+            errorCode: result.reason?.errorCode || null,
+        });
+    });
+
+    return {
+        interval: normalizedInterval,
+        symbols: symbolList,
+        data,
+        errors,
+    };
+}
+
 module.exports = {
     collectSignalSnapshot,
     fetchSignalCached,
+    fetchSignalsBatch,
+    parseSignalSymbolsInput,
 };
