@@ -883,6 +883,7 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
                 total: 0,
             },
         }).summary,
+        note: `Data belum cukup untuk hitung indikator. Minimal butuh ${MIN_CANDLES_REQUIRED} candle, jadi hasil bisa terlihat error atau kosong sampai histori terkumpul.`,
     };
 }
 
@@ -1343,6 +1344,7 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
             oscillatorIndicators,
             movingAverageIndicators,
         }).summary,
+        note: "Hasil bisa sedikit berbeda atau terlihat error dibanding TradingView karena sumber feed berbeda, candle dibentuk dari agregasi quote, dan VWMA memakai tick volume proxy dari jumlah update quote.",
     };
 }
 
