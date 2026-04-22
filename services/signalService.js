@@ -1,7 +1,7 @@
 const axios = require("axios");
 const { getCache, setCache } = require("./cacheStore");
 
-    const SWISSQUOTE_BASE_URL =
+const SWISSQUOTE_BASE_URL =
     "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument";
 const REQUEST_TIMEOUT_MS = Number(process.env.SIGNAL_REQUEST_TIMEOUT_MS || 15000);
 const MINUTE_HISTORY_LIMIT = Math.max(
@@ -888,7 +888,7 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
             },
         }).summary,
         errorCode: SIGNAL_ERROR_CODES.INSUFFICIENT_CANDLE_HISTORY,
-        note: `Data belum cukup untuk hitung indikator. Minimal butuh ${MIN_CANDLES_REQUIRED} candle, jadi hasil bisa terlihat error atau kosong sampai histori terkumpul.`,
+        note: `Data historis tidak mencukupi untuk menghitung indikator. Diperlukan minimal ${MIN_CANDLES_REQUIRED} candle agar analisis dapat ditampilkan dengan benar. Hasil mungkin kosong atau tidak akurat hingga data terpenuhi.`,
     };
 }
 
