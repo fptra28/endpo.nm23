@@ -1,7 +1,7 @@
 const axios = require("axios");
 const { getCache, setCache } = require("./cacheStore");
 
-const SWISSQUOTE_BASE_URL =
+    const SWISSQUOTE_BASE_URL =
     "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument";
 const REQUEST_TIMEOUT_MS = Number(process.env.SIGNAL_REQUEST_TIMEOUT_MS || 15000);
 const MINUTE_HISTORY_LIMIT = Math.max(
@@ -9,8 +9,8 @@ const MINUTE_HISTORY_LIMIT = Math.max(
     Number(process.env.SIGNAL_HISTORY_LIMIT || 20000)
 );
 const MIN_CANDLES_REQUIRED = Math.max(
-    100,
-    Number(process.env.SIGNAL_MIN_POINTS || 120)
+    200,
+    Number(process.env.SIGNAL_MIN_POINTS || 200)
 );
 const DEFAULT_PROFILE = String(process.env.SIGNAL_SWISSQUOTE_PROFILE || "premium")
     .trim()
@@ -116,6 +116,7 @@ function normalizeMinuteCandle(raw) {
         bid: Number.isFinite(Number(raw.bid)) ? Number(raw.bid) : close,
         ask: Number.isFinite(Number(raw.ask)) ? Number(raw.ask) : close,
         spread: Number.isFinite(Number(raw.spread)) ? Number(raw.spread) : null,
+        tickVolume: Math.max(1, Number(raw.tickVolume) || 1),
         spreadProfile: raw.spreadProfile || null,
         topo: raw.topo || null,
     };
@@ -141,6 +142,7 @@ function sanitizeMinuteCandles(items) {
             last.ask = candle.ask;
             last.bid = candle.bid;
             last.spread = candle.spread;
+            last.tickVolume = (Number(last.tickVolume) || 1) + (Number(candle.tickVolume) || 1);
             last.updatedAt = candle.updatedAt;
             continue;
         }
@@ -155,6 +157,19 @@ function sma(values, period) {
     if (values.length < period) return null;
     const window = values.slice(values.length - period);
     return window.reduce((sum, value) => sum + value, 0) / period;
+}
+
+function wma(values, period) {
+    if (values.length < period) return null;
+
+    const window = values.slice(values.length - period);
+    const denominator = (period * (period + 1)) / 2;
+    const weightedSum = window.reduce(
+        (total, value, index) => total + (value * (index + 1)),
+        0
+    );
+
+    return weightedSum / denominator;
 }
 
 function sum(values, period) {
@@ -191,6 +206,42 @@ function emaSeries(values, period) {
 function ema(values, period) {
     const series = emaSeries(values, period);
     return series.length ? series[series.length - 1] : null;
+}
+
+function hma(values, period) {
+    if (values.length < period) return null;
+
+    const halfPeriod = Math.max(1, Math.floor(period / 2));
+    const sqrtPeriod = Math.max(1, Math.round(Math.sqrt(period)));
+    const diffSeries = [];
+
+    for (let index = period - 1; index < values.length; index += 1) {
+        const prefix = values.slice(0, index + 1);
+        const fullWma = wma(prefix, period);
+        const halfWma = wma(prefix, halfPeriod);
+
+        if (!Number.isFinite(fullWma) || !Number.isFinite(halfWma)) continue;
+        diffSeries.push((2 * halfWma) - fullWma);
+    }
+
+    return wma(diffSeries, sqrtPeriod);
+}
+
+function vwma(values, volumes, period) {
+    if (values.length < period || volumes.length < period) return null;
+
+    const priceWindow = values.slice(values.length - period);
+    const volumeWindow = volumes.slice(volumes.length - period);
+    const totalVolume = volumeWindow.reduce((total, value) => total + value, 0);
+
+    if (!Number.isFinite(totalVolume) || totalVolume <= 0) return null;
+
+    const weightedTotal = priceWindow.reduce(
+        (total, price, index) => total + (price * volumeWindow[index]),
+        0
+    );
+
+    return weightedTotal / totalVolume;
 }
 
 function rsiSeries(values, period = 14) {
@@ -474,6 +525,31 @@ function ultimateOscillator(highs, lows, closes) {
     return 100 * ((4 * average7) + (2 * average14) + average28) / 7;
 }
 
+function ichimokuCloud(highs, lows, conversionPeriod = 9, basePeriod = 26, spanBPeriod = 52) {
+    if (highs.length < spanBPeriod || lows.length < spanBPeriod) {
+        return null;
+    }
+
+    const conversionHigh = Math.max(...highs.slice(highs.length - conversionPeriod));
+    const conversionLow = Math.min(...lows.slice(lows.length - conversionPeriod));
+    const baseHigh = Math.max(...highs.slice(highs.length - basePeriod));
+    const baseLow = Math.min(...lows.slice(lows.length - basePeriod));
+    const spanBHigh = Math.max(...highs.slice(highs.length - spanBPeriod));
+    const spanBLow = Math.min(...lows.slice(lows.length - spanBPeriod));
+
+    const conversionLine = (conversionHigh + conversionLow) / 2;
+    const baseLine = (baseHigh + baseLow) / 2;
+    const leadingSpanA = (conversionLine + baseLine) / 2;
+    const leadingSpanB = (spanBHigh + spanBLow) / 2;
+
+    return {
+        conversionLine,
+        baseLine,
+        leadingSpanA,
+        leadingSpanB,
+    };
+}
+
 function resolveOscillatorSignal(value, type) {
     if (!Number.isFinite(value)) return "NEUTRAL";
 
@@ -495,25 +571,84 @@ function resolveOscillatorSignal(value, type) {
             if (value > 80) return "SELL";
             return "NEUTRAL";
         case "UO":
-            if (value < 30) return "BUY";
-            if (value > 70) return "SELL";
+            if (value > 70) return "BUY";
+            if (value < 30) return "SELL";
             return "NEUTRAL";
         default:
             return "NEUTRAL";
     }
 }
 
+function resolveMovingAverageSignal(price, movingAverage) {
+    if (!Number.isFinite(price) || !Number.isFinite(movingAverage)) return "NEUTRAL";
+    if (price > movingAverage) return "BUY";
+    if (price < movingAverage) return "SELL";
+    return "NEUTRAL";
+}
+
 function resolveSummary(votes, total) {
     if (total === 0) return "NEUTRAL";
 
-    const buyRatio = votes.buy / total;
-    const sellRatio = votes.sell / total;
+    const score = (votes.buy - votes.sell) / total;
 
-    if (sellRatio >= 0.65 && votes.sell > votes.buy) return "STRONG SELL";
-    if (buyRatio >= 0.65 && votes.buy > votes.sell) return "STRONG BUY";
-    if (votes.sell > votes.buy) return "SELL";
-    if (votes.buy > votes.sell) return "BUY";
-    return "NEUTRAL";
+    if (score <= -0.5) return "STRONG SELL";
+    if (score < -0.1) return "SELL";
+    if (score <= 0.1) return "NEUTRAL";
+    if (score <= 0.5) return "BUY";
+    return "STRONG BUY";
+}
+
+function tallyVotes(indicators) {
+    return indicators.reduce(
+        (accumulator, indicator) => {
+            if (indicator.signal === "BUY") accumulator.buy += 1;
+            else if (indicator.signal === "SELL") accumulator.sell += 1;
+            else accumulator.neutral += 1;
+            return accumulator;
+        },
+        { buy: 0, sell: 0, neutral: 0 }
+    );
+}
+
+function buildIndicatorSections({
+    summary,
+    detail,
+    totalIndicators,
+    oscillatorSummary,
+    movingAverageSummary,
+    oscillatorIndicators = [],
+    movingAverageIndicators = [],
+}) {
+    return {
+        summary: {
+            label: "Summary",
+            summary,
+            detail,
+            total: totalIndicators,
+        },
+        oscillators: {
+            label: "Oscillators",
+            summary: oscillatorSummary.summary,
+            detail: oscillatorSummary.detail,
+            total: oscillatorSummary.total,
+            indicators: oscillatorIndicators,
+        },
+        movingAverages: {
+            label: "Moving Averages",
+            summary: movingAverageSummary.summary,
+            detail: movingAverageSummary.detail,
+            total: movingAverageSummary.total,
+            indicators: movingAverageIndicators,
+        },
+    };
+}
+
+function formatActionLabel(signal) {
+    const normalized = String(signal || "NEUTRAL").toUpperCase();
+
+    if (normalized === "BUY") return "Buy";
+    if (normalized === "SELL") return "Sell";
+    return "Neutral";
 }
 
 async function loadMinuteHistory(symbol) {
@@ -636,6 +771,7 @@ function upsertMinuteCandle(minuteCandles, quote) {
         last.ask = quote.ask;
         last.bid = quote.bid;
         last.spread = quote.spread;
+        last.tickVolume = (Number(last.tickVolume) || 1) + 1;
         last.updatedAt = quote.timestamp;
         return minuteCandles;
     }
@@ -651,6 +787,7 @@ function upsertMinuteCandle(minuteCandles, quote) {
         bid: quote.bid,
         ask: quote.ask,
         spread: quote.spread,
+        tickVolume: 1,
         spreadProfile: quote.spreadProfile,
         topo: quote.topo,
     });
@@ -676,6 +813,7 @@ function aggregateCandles(minuteCandles, interval) {
                 high: candle.high,
                 low: candle.low,
                 close: candle.close,
+                tickVolume: Number(candle.tickVolume) || 1,
             });
             continue;
         }
@@ -683,6 +821,7 @@ function aggregateCandles(minuteCandles, interval) {
         existing.high = Math.max(existing.high, candle.high);
         existing.low = Math.min(existing.low, candle.low);
         existing.close = candle.close;
+        existing.tickVolume += Number(candle.tickVolume) || 1;
     }
 
     return Array.from(bucketMap.values()).sort((a, b) => a.bucketTs - b.bucketTs);
@@ -712,14 +851,16 @@ async function collectSignalSnapshot({ symbol, profile } = {}) {
 }
 
 function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles }) {
+    const emptyVotes = {
+        buy: 0,
+        sell: 0,
+        neutral: 0,
+    };
+
     return {
         status: "WARMING_UP",
         summary: "NEUTRAL",
-        detail: {
-            buy: 0,
-            sell: 0,
-            neutral: 0,
-        },
+        detail: emptyVotes,
         totalIndicators: 0,
         symbol,
         requestedInterval: interval,
@@ -737,6 +878,31 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
         minuteHistoryPoints: minuteCandles.length,
         aggregatedCandles: candles.length,
         minCandlesRequired: MIN_CANDLES_REQUIRED,
+        oscillatorSummary: {
+            summary: "NEUTRAL",
+            detail: emptyVotes,
+            total: 0,
+        },
+        movingAverageSummary: {
+            summary: "NEUTRAL",
+            detail: emptyVotes,
+            total: 0,
+        },
+        indicatorSections: buildIndicatorSections({
+            summary: "NEUTRAL",
+            detail: emptyVotes,
+            totalIndicators: 0,
+            oscillatorSummary: {
+                summary: "NEUTRAL",
+                detail: emptyVotes,
+                total: 0,
+            },
+            movingAverageSummary: {
+                summary: "NEUTRAL",
+                detail: emptyVotes,
+                total: 0,
+            },
+        }),
         indicators: [],
         note: "Akurasi sebelumnya meleset karena memakai snapshot tick mentah. Sekarang data diagregasi dulu jadi candle per interval, tapi tetap belum akan identik 100% dengan feed TradingView/OANDA.",
     };
@@ -756,6 +922,7 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
     const closes = candles.map((candle) => candle.close);
     const highs = candles.map((candle) => candle.high);
     const lows = candles.map((candle) => candle.low);
+    const volumes = candles.map((candle) => Number(candle.tickVolume) || 1);
     const price = closes[closes.length - 1];
 
     const rsi14 = rsi(closes, 14);
@@ -780,237 +947,415 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
     const sma50 = sma(closes, 50);
     const ema100 = ema(closes, 100);
     const sma100 = sma(closes, 100);
+    const ema200 = ema(closes, 200);
+    const sma200 = sma(closes, 200);
+    const hma9 = hma(closes, 9);
+    const vwma20 = vwma(closes, volumes, 20);
+    const ichimoku = ichimokuCloud(highs, lows, 9, 26, 52);
 
     const indicators = [];
 
-    indicators.push({
-        indicator: "RSI(14)",
-        group: "oscillator",
-        value: formatNumber(rsi14, 3),
-        signal: resolveOscillatorSignal(rsi14, "RSI"),
-    });
-    indicators.push({
-        indicator: "Stochastic %K(14,3,3)",
-        group: "oscillator",
-        value: stoch14
-            ? {
-                k: formatNumber(stoch14.k, 3),
-                d: formatNumber(stoch14.d, 3),
-            }
-            : null,
-        signal: resolveOscillatorSignal(stoch14?.k, "STOCH"),
-    });
-    indicators.push({
-        indicator: "CCI(20)",
-        group: "oscillator",
-        value: formatNumber(cci20, 3),
-        signal: resolveOscillatorSignal(cci20, "CCI"),
-    });
-    indicators.push({
-        indicator: "ADX(14)",
-        group: "oscillator",
-        value: adx14
-            ? {
-                adx: formatNumber(adx14.adx, 3),
-                plusDi: formatNumber(adx14.plusDi, 3),
-                minusDi: formatNumber(adx14.minusDi, 3),
-            }
-            : null,
-        signal:
+    {
+        const signal = resolveOscillatorSignal(rsi14, "RSI");
+        indicators.push({
+            name: "Relative Strength Index (14)",
+            indicator: "Relative Strength Index (14)",
+            group: "oscillator",
+            value: formatNumber(rsi14, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveOscillatorSignal(stoch14?.k, "STOCH");
+        indicators.push({
+            name: "Stochastic %K (14, 3, 3)",
+            indicator: "Stochastic %K (14, 3, 3)",
+            group: "oscillator",
+            value: formatNumber(stoch14?.k, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: stoch14
+                ? {
+                    k: formatNumber(stoch14.k, 3),
+                    d: formatNumber(stoch14.d, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal = resolveOscillatorSignal(cci20, "CCI");
+        indicators.push({
+            name: "Commodity Channel Index (20)",
+            indicator: "Commodity Channel Index (20)",
+            group: "oscillator",
+            value: formatNumber(cci20, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal =
             !adx14 || !Number.isFinite(adx14.adx)
                 ? "NEUTRAL"
                 : adx14.adx < 20
                     ? "NEUTRAL"
                     : adx14.plusDi > adx14.minusDi
                         ? "BUY"
-                        : "SELL",
-    });
-    indicators.push({
-        indicator: "Awesome Oscillator",
-        group: "oscillator",
-        value: formatNumber(ao, 3),
-        signal:
+                        : "SELL";
+        indicators.push({
+            name: "Average Directional Index (14)",
+            indicator: "Average Directional Index (14)",
+            group: "oscillator",
+            value: formatNumber(adx14?.adx, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: adx14
+                ? {
+                    adx: formatNumber(adx14.adx, 3),
+                    plusDi: formatNumber(adx14.plusDi, 3),
+                    minusDi: formatNumber(adx14.minusDi, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal =
             !Number.isFinite(ao)
                 ? "NEUTRAL"
                 : ao > 0
                     ? "BUY"
                     : ao < 0
                         ? "SELL"
-                        : "NEUTRAL",
-    });
-    indicators.push({
-        indicator: "Momentum(10)",
-        group: "oscillator",
-        value: formatNumber(momentum10, 3),
-        signal:
+                        : "NEUTRAL";
+        indicators.push({
+            name: "Awesome Oscillator",
+            indicator: "Awesome Oscillator",
+            group: "oscillator",
+            value: formatNumber(ao, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal =
             !Number.isFinite(momentum10)
                 ? "NEUTRAL"
                 : momentum10 > 0
                     ? "BUY"
                     : momentum10 < 0
                         ? "SELL"
-                        : "NEUTRAL",
-    });
-    indicators.push({
-        indicator: "MACD Level(12,26)",
-        group: "oscillator",
-        value: macdValue
-            ? {
-                macd: formatNumber(macdValue.MACD, 3),
-                signal: formatNumber(macdValue.signal, 3),
-                histogram: formatNumber(macdValue.histogram, 3),
-            }
-            : null,
-        signal:
+                        : "NEUTRAL";
+        indicators.push({
+            name: "Momentum (10)",
+            indicator: "Momentum (10)",
+            group: "oscillator",
+            value: formatNumber(momentum10, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal =
             !macdValue
                 ? "NEUTRAL"
                 : macdValue.MACD > macdValue.signal
                     ? "BUY"
                     : macdValue.MACD < macdValue.signal
                         ? "SELL"
-                        : "NEUTRAL",
-    });
-    indicators.push({
-        indicator: "Stoch RSI Fast(3,3,14,14)",
-        group: "oscillator",
-        value: stochRsiValue
-            ? {
-                k: formatNumber(stochRsiValue.k, 3),
-                d: formatNumber(stochRsiValue.d, 3),
-            }
-            : null,
-        signal: resolveOscillatorSignal(stochRsiValue?.k, "STOCH"),
-    });
-    indicators.push({
-        indicator: "Williams %R(14)",
-        group: "oscillator",
-        value: formatNumber(willr14, 3),
-        signal: resolveOscillatorSignal(willr14, "WILLR"),
-    });
-    indicators.push({
-        indicator: "Bull Bear Power",
-        group: "oscillator",
-        value: bullBear
-            ? {
-                bull: formatNumber(bullBear.bull, 3),
-                bear: formatNumber(bullBear.bear, 3),
-                ema13: formatNumber(bullBear.ema, 3),
-            }
-            : null,
-        signal:
+                        : "NEUTRAL";
+        indicators.push({
+            name: "MACD Level (12, 26)",
+            indicator: "MACD Level (12, 26)",
+            group: "oscillator",
+            value: formatNumber(macdValue?.MACD, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: macdValue
+                ? {
+                    macd: formatNumber(macdValue.MACD, 3),
+                    signal: formatNumber(macdValue.signal, 3),
+                    histogram: formatNumber(macdValue.histogram, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal = resolveOscillatorSignal(stochRsiValue?.k, "STOCH");
+        indicators.push({
+            name: "Stochastic RSI Fast (3, 3, 14, 14)",
+            indicator: "Stochastic RSI Fast (3, 3, 14, 14)",
+            group: "oscillator",
+            value: formatNumber(stochRsiValue?.k, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: stochRsiValue
+                ? {
+                    k: formatNumber(stochRsiValue.k, 3),
+                    d: formatNumber(stochRsiValue.d, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal = resolveOscillatorSignal(willr14, "WILLR");
+        indicators.push({
+            name: "Williams Percent Range (14)",
+            indicator: "Williams Percent Range (14)",
+            group: "oscillator",
+            value: formatNumber(willr14, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal =
             !bullBear
                 ? "NEUTRAL"
                 : bullBear.bull > 0 && bullBear.bear > 0
                     ? "BUY"
                     : bullBear.bull < 0 && bullBear.bear < 0
                         ? "SELL"
-                        : "NEUTRAL",
-    });
-    indicators.push({
-        indicator: "Ultimate Oscillator(7,14,28)",
-        group: "oscillator",
-        value: formatNumber(uo, 3),
-        signal: resolveOscillatorSignal(uo, "UO"),
-    });
+                        : "NEUTRAL";
+        indicators.push({
+            name: "Bull Bear Power",
+            indicator: "Bull Bear Power",
+            group: "oscillator",
+            value: formatNumber(bullBear?.bull, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: bullBear
+                ? {
+                    bull: formatNumber(bullBear.bull, 3),
+                    bear: formatNumber(bullBear.bear, 3),
+                    ema13: formatNumber(bullBear.ema, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal = resolveOscillatorSignal(uo, "UO");
+        indicators.push({
+            name: "Ultimate Oscillator (7, 14, 28)",
+            indicator: "Ultimate Oscillator (7, 14, 28)",
+            group: "oscillator",
+            value: formatNumber(uo, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
 
-    indicators.push({
-        indicator: "EMA(10)",
-        group: "moving_average",
-        value: formatNumber(ema10, 3),
-        signal: price > ema10 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "SMA(10)",
-        group: "moving_average",
-        value: formatNumber(sma10, 3),
-        signal: price > sma10 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "EMA(20)",
-        group: "moving_average",
-        value: formatNumber(ema20, 3),
-        signal: price > ema20 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "SMA(20)",
-        group: "moving_average",
-        value: formatNumber(sma20, 3),
-        signal: price > sma20 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "EMA(30)",
-        group: "moving_average",
-        value: formatNumber(ema30, 3),
-        signal: price > ema30 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "SMA(30)",
-        group: "moving_average",
-        value: formatNumber(sma30, 3),
-        signal: price > sma30 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "EMA(50)",
-        group: "moving_average",
-        value: formatNumber(ema50, 3),
-        signal: price > ema50 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "SMA(50)",
-        group: "moving_average",
-        value: formatNumber(sma50, 3),
-        signal: price > sma50 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "EMA(100)",
-        group: "moving_average",
-        value: formatNumber(ema100, 3),
-        signal: price > ema100 ? "BUY" : "SELL",
-    });
-    indicators.push({
-        indicator: "SMA(100)",
-        group: "moving_average",
-        value: formatNumber(sma100, 3),
-        signal: price > sma100 ? "BUY" : "SELL",
-    });
+    {
+        const signal = resolveMovingAverageSignal(price, ema10);
+        indicators.push({
+            name: "Exponential Moving Average (10)",
+            indicator: "Exponential Moving Average (10)",
+            group: "moving_average",
+            value: formatNumber(ema10, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma10);
+        indicators.push({
+            name: "Simple Moving Average (10)",
+            indicator: "Simple Moving Average (10)",
+            group: "moving_average",
+            value: formatNumber(sma10, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, ema20);
+        indicators.push({
+            name: "Exponential Moving Average (20)",
+            indicator: "Exponential Moving Average (20)",
+            group: "moving_average",
+            value: formatNumber(ema20, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma20);
+        indicators.push({
+            name: "Simple Moving Average (20)",
+            indicator: "Simple Moving Average (20)",
+            group: "moving_average",
+            value: formatNumber(sma20, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, ema30);
+        indicators.push({
+            name: "Exponential Moving Average (30)",
+            indicator: "Exponential Moving Average (30)",
+            group: "moving_average",
+            value: formatNumber(ema30, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma30);
+        indicators.push({
+            name: "Simple Moving Average (30)",
+            indicator: "Simple Moving Average (30)",
+            group: "moving_average",
+            value: formatNumber(sma30, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, ema50);
+        indicators.push({
+            name: "Exponential Moving Average (50)",
+            indicator: "Exponential Moving Average (50)",
+            group: "moving_average",
+            value: formatNumber(ema50, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma50);
+        indicators.push({
+            name: "Simple Moving Average (50)",
+            indicator: "Simple Moving Average (50)",
+            group: "moving_average",
+            value: formatNumber(sma50, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, ema100);
+        indicators.push({
+            name: "Exponential Moving Average (100)",
+            indicator: "Exponential Moving Average (100)",
+            group: "moving_average",
+            value: formatNumber(ema100, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma100);
+        indicators.push({
+            name: "Simple Moving Average (100)",
+            indicator: "Simple Moving Average (100)",
+            group: "moving_average",
+            value: formatNumber(sma100, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, ema200);
+        indicators.push({
+            name: "Exponential Moving Average (200)",
+            indicator: "Exponential Moving Average (200)",
+            group: "moving_average",
+            value: formatNumber(ema200, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, sma200);
+        indicators.push({
+            name: "Simple Moving Average (200)",
+            indicator: "Simple Moving Average (200)",
+            group: "moving_average",
+            value: formatNumber(sma200, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal =
+            !ichimoku
+                ? "NEUTRAL"
+                : ichimoku.leadingSpanA > ichimoku.leadingSpanB &&
+                    ichimoku.baseLine > ichimoku.leadingSpanA &&
+                    ichimoku.conversionLine > ichimoku.baseLine &&
+                    price > ichimoku.conversionLine
+                    ? "BUY"
+                    : ichimoku.leadingSpanA < ichimoku.leadingSpanB &&
+                        ichimoku.baseLine < ichimoku.leadingSpanA &&
+                        ichimoku.conversionLine < ichimoku.baseLine &&
+                        price < ichimoku.conversionLine
+                        ? "SELL"
+                        : "NEUTRAL";
+        indicators.push({
+            name: "Ichimoku Base Line (9, 26, 52, 26)",
+            indicator: "Ichimoku Base Line (9, 26, 52, 26)",
+            group: "moving_average",
+            value: formatNumber(ichimoku?.baseLine, 3),
+            signal,
+            action: formatActionLabel(signal),
+            components: ichimoku
+                ? {
+                    conversionLine: formatNumber(ichimoku.conversionLine, 3),
+                    baseLine: formatNumber(ichimoku.baseLine, 3),
+                    leadingSpanA: formatNumber(ichimoku.leadingSpanA, 3),
+                    leadingSpanB: formatNumber(ichimoku.leadingSpanB, 3),
+                }
+                : null,
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, vwma20);
+        indicators.push({
+            name: "Volume Weighted Moving Average (20)",
+            indicator: "Volume Weighted Moving Average (20)",
+            group: "moving_average",
+            value: formatNumber(vwma20, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
+    {
+        const signal = resolveMovingAverageSignal(price, hma9);
+        indicators.push({
+            name: "Hull Moving Average (9)",
+            indicator: "Hull Moving Average (9)",
+            group: "moving_average",
+            value: formatNumber(hma9, 3),
+            signal,
+            action: formatActionLabel(signal),
+        });
+    }
 
-    const votes = indicators.reduce(
-        (accumulator, indicator) => {
-            if (indicator.signal === "BUY") accumulator.buy += 1;
-            else if (indicator.signal === "SELL") accumulator.sell += 1;
-            else accumulator.neutral += 1;
-            return accumulator;
-        },
-        { buy: 0, sell: 0, neutral: 0 }
+    const votes = tallyVotes(indicators);
+
+    const oscillatorIndicators = indicators.filter((indicator) => indicator.group === "oscillator");
+    const movingAverageIndicators = indicators.filter(
+        (indicator) => indicator.group === "moving_average"
     );
 
-    const oscillatorVotes = indicators
-        .filter((indicator) => indicator.group === "oscillator")
-        .reduce(
-            (accumulator, indicator) => {
-                if (indicator.signal === "BUY") accumulator.buy += 1;
-                else if (indicator.signal === "SELL") accumulator.sell += 1;
-                else accumulator.neutral += 1;
-                return accumulator;
-            },
-            { buy: 0, sell: 0, neutral: 0 }
-        );
-
-    const movingAverageVotes = indicators
-        .filter((indicator) => indicator.group === "moving_average")
-        .reduce(
-            (accumulator, indicator) => {
-                if (indicator.signal === "BUY") accumulator.buy += 1;
-                else if (indicator.signal === "SELL") accumulator.sell += 1;
-                else accumulator.neutral += 1;
-                return accumulator;
-            },
-            { buy: 0, sell: 0, neutral: 0 }
-        );
+    const oscillatorVotes = tallyVotes(oscillatorIndicators);
+    const movingAverageVotes = tallyVotes(movingAverageIndicators);
+    const summaryValue = resolveSummary(votes, indicators.length);
+    const oscillatorSummaryValue = {
+        summary: resolveSummary(oscillatorVotes, oscillatorIndicators.length),
+        detail: oscillatorVotes,
+        total: oscillatorIndicators.length,
+    };
+    const movingAverageSummaryValue = {
+        summary: resolveSummary(movingAverageVotes, movingAverageIndicators.length),
+        detail: movingAverageVotes,
+        total: movingAverageIndicators.length,
+    };
 
     return {
         status: "READY",
-        summary: resolveSummary(votes, indicators.length),
+        summary: summaryValue,
         detail: votes,
         totalIndicators: indicators.length,
         symbol,
@@ -1029,18 +1374,19 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
         minuteHistoryPoints: minuteCandles.length,
         aggregatedCandles: candles.length,
         minCandlesRequired: MIN_CANDLES_REQUIRED,
-        oscillatorSummary: {
-            summary: resolveSummary(oscillatorVotes, 11),
-            detail: oscillatorVotes,
-            total: 11,
-        },
-        movingAverageSummary: {
-            summary: resolveSummary(movingAverageVotes, 10),
-            detail: movingAverageVotes,
-            total: 10,
-        },
+        oscillatorSummary: oscillatorSummaryValue,
+        movingAverageSummary: movingAverageSummaryValue,
+        indicatorSections: buildIndicatorSections({
+            summary: summaryValue,
+            detail: votes,
+            totalIndicators: indicators.length,
+            oscillatorSummary: oscillatorSummaryValue,
+            movingAverageSummary: movingAverageSummaryValue,
+            oscillatorIndicators,
+            movingAverageIndicators,
+        }),
         indicators,
-        note: "Sekarang indikator dihitung dari candle hasil agregasi 1m/5m/15m/30m/60m. Hasilnya jauh lebih dekat ke Technicals TradingView, tetapi tetap bisa beda tipis karena sumber feed dan metode chart mereka tidak identik.",
+        note: "Summary sekarang menggabungkan 26 indikator: 11 Oscillators dan 15 Moving Averages. Perhitungan tetap berbasis candle hasil agregasi 1m/5m/15m/30m/60m, jadi hasilnya bisa sedikit berbeda dari TradingView karena feed dan metode chart tidak identik. VWMA(20) memakai tick volume proxy dari jumlah update quote per candle.",
     };
 }
 
