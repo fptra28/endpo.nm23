@@ -15,6 +15,10 @@ const MIN_CANDLES_REQUIRED = Math.max(
 const DEFAULT_PROFILE = String(process.env.SIGNAL_SWISSQUOTE_PROFILE || "premium")
     .trim()
     .toLowerCase();
+const SIGNAL_ERROR_CODES = {
+    INSUFFICIENT_CANDLE_HISTORY: "SIGNAL_INSUFFICIENT_CANDLE_HISTORY",
+    SOURCE_METHOD_DIFFERENCE: "SIGNAL_SOURCE_METHOD_DIFFERENCE",
+};
 
 const minuteHistoryMemory = new Map();
 
@@ -883,6 +887,7 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
                 total: 0,
             },
         }).summary,
+        errorCode: SIGNAL_ERROR_CODES.INSUFFICIENT_CANDLE_HISTORY,
         note: `Data belum cukup untuk hitung indikator. Minimal butuh ${MIN_CANDLES_REQUIRED} candle, jadi hasil bisa terlihat error atau kosong sampai histori terkumpul.`,
     };
 }
@@ -1344,6 +1349,7 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
             oscillatorIndicators,
             movingAverageIndicators,
         }).summary,
+        errorCode: SIGNAL_ERROR_CODES.SOURCE_METHOD_DIFFERENCE,
         note: "Hasil bisa sedikit berbeda atau terlihat error dibanding TradingView karena sumber feed berbeda, candle dibentuk dari agregasi quote, dan VWMA memakai tick volume proxy dari jumlah update quote.",
     };
 }
