@@ -858,26 +858,6 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
     };
 
     return {
-        status: "WARMING_UP",
-        summary: "NEUTRAL",
-        detail: emptyVotes,
-        totalIndicators: 0,
-        symbol,
-        requestedInterval: interval,
-        effectiveInterval: interval,
-        source: "Swissquote",
-        sourceFunction: "public-quotes/bboquotes",
-        price: formatNumber(quote.mid, 4),
-        bid: formatNumber(quote.bid, 4),
-        ask: formatNumber(quote.ask, 4),
-        spread: formatNumber(quote.spread, 4),
-        spreadProfile: quote.spreadProfile,
-        topo: quote.topo,
-        latestCandleAt: candles[candles.length - 1]?.timestamp || quote.timestamp,
-        fetched_at: new Date().toISOString(),
-        minuteHistoryPoints: minuteCandles.length,
-        aggregatedCandles: candles.length,
-        minCandlesRequired: MIN_CANDLES_REQUIRED,
         oscillatorSummary: {
             summary: "NEUTRAL",
             detail: emptyVotes,
@@ -888,7 +868,7 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
             detail: emptyVotes,
             total: 0,
         },
-        indicatorSections: buildIndicatorSections({
+        summary: buildIndicatorSections({
             summary: "NEUTRAL",
             detail: emptyVotes,
             totalIndicators: 0,
@@ -902,9 +882,7 @@ function buildWarmupPayload({ symbol, interval, quote, minuteCandles, candles })
                 detail: emptyVotes,
                 total: 0,
             },
-        }),
-        indicators: [],
-        note: "Akurasi sebelumnya meleset karena memakai snapshot tick mentah. Sekarang data diagregasi dulu jadi candle per interval, tapi tetap belum akan identik 100% dengan feed TradingView/OANDA.",
+        }).summary,
     };
 }
 
@@ -1354,29 +1332,9 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
     };
 
     return {
-        status: "READY",
-        summary: summaryValue,
-        detail: votes,
-        totalIndicators: indicators.length,
-        symbol,
-        requestedInterval: interval,
-        effectiveInterval: interval,
-        source: "Swissquote",
-        sourceFunction: "public-quotes/bboquotes",
-        price: formatNumber(price, 3),
-        bid: formatNumber(quote.bid, 3),
-        ask: formatNumber(quote.ask, 3),
-        spread: formatNumber(quote.spread, 3),
-        spreadProfile: quote.spreadProfile,
-        topo: quote.topo,
-        latestCandleAt: candles[candles.length - 1]?.timestamp || quote.timestamp,
-        fetched_at: new Date().toISOString(),
-        minuteHistoryPoints: minuteCandles.length,
-        aggregatedCandles: candles.length,
-        minCandlesRequired: MIN_CANDLES_REQUIRED,
         oscillatorSummary: oscillatorSummaryValue,
         movingAverageSummary: movingAverageSummaryValue,
-        indicatorSections: buildIndicatorSections({
+        summary: buildIndicatorSections({
             summary: summaryValue,
             detail: votes,
             totalIndicators: indicators.length,
@@ -1384,9 +1342,7 @@ function buildIndicatorPayload({ symbol, interval, minuteCandles, candles, quote
             movingAverageSummary: movingAverageSummaryValue,
             oscillatorIndicators,
             movingAverageIndicators,
-        }),
-        indicators,
-        note: "Summary sekarang menggabungkan 26 indikator: 11 Oscillators dan 15 Moving Averages. Perhitungan tetap berbasis candle hasil agregasi 1m/5m/15m/30m/60m, jadi hasilnya bisa sedikit berbeda dari TradingView karena feed dan metode chart tidak identik. VWMA(20) memakai tick volume proxy dari jumlah update quote per candle.",
+        }).summary,
     };
 }
 
