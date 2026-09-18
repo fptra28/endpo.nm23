@@ -3,8 +3,37 @@ const { fetchBiRate } = require("./scraper");
 const { fetchBiFxCached } = require("./biFxScraper");
 const { fetchInvestingMultipleCached } = require("./investingBcaScraper");
 const { collectSignalSnapshot, parseSignalSymbolsInput } = require("./signalService");
+const { fetchLatestIcdxPressReleaseWithAi } = require("./icdxScraper");
 
 function startCron() {
+    if (process.env.ICDX_AI_POLL_ENABLED === "true") {
+        const intervalSec = Math.max(
+            60,
+            Number(process.env.ICDX_AI_POLL_INTERVAL_SEC || 3600)
+        );
+        let inFlight = false;
+
+        const scrapeIcdx = async () => {
+            if (inFlight) return;
+            inFlight = true;
+            try {
+                console.log("Scraping ICDX Press Release with AI...");
+                const result = await fetchLatestIcdxPressReleaseWithAi({
+                    bypassCache: true,
+                });
+                console.log(`ICDX AI scraping completed: ${result.count} row(s)`);
+            } catch (err) {
+                console.error("ICDX AI scraping failed:", err.message);
+            } finally {
+                inFlight = false;
+            }
+        };
+
+        console.log(`ICDX AI polling enabled: every ${intervalSec}s`);
+        setTimeout(scrapeIcdx, 1000);
+        setInterval(scrapeIcdx, intervalSec * 1000);
+    }
+
     // jalan setiap hari jam 08:00 (Asia/Jakarta)
     cron.schedule("0 8 * * *", async () => {
         try {

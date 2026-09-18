@@ -1,51 +1,70 @@
 // services/cacheStore.js
-const { sql } = require("@vercel/postgres");
+const { Pool } = require("pg");
 
+let pool;
 
-function ensureConnEnv() {
-    if (!process.env.POSTGRES_URL && process.env.DATABASE_URL) {
-        process.env.POSTGRES_URL = process.env.DATABASE_URL;
+function getPool() {
+    const connectionString = process.env.POSTGRES_URL || process.env.DATABASE_URL;
+    if (!connectionString) return null;
+
+    if (!pool) {
+        pool = new Pool({
+            connectionString,
+            max: Number(process.env.POSTGRES_POOL_MAX || 10),
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000,
+        });
+        pool.on("error", (error) => {
+            console.error("Koneksi PostgreSQL idle mengalami error:", error.message);
+        });
     }
+
+    return pool;
 }
 
 async function ensureTable() {
-    ensureConnEnv();
-    if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) return;
+    const db = getPool();
+    if (!db) return;
     // create table if not exists
-    await sql`
+    await db.query(`
         CREATE TABLE IF NOT EXISTS cache_store (
             key TEXT PRIMARY KEY,
             payload JSONB NOT NULL,
             fetched_at TIMESTAMPTZ NOT NULL
         );
-    `;
+    `);
 }
 
 async function getCache(key) {
-    ensureConnEnv();
-    if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) return null;
+    const db = getPool();
+    if (!db) return null;
     await ensureTable();
-    const rows = await sql`
+    const result = await db.query(
+        `
         SELECT key, payload, fetched_at
         FROM cache_store
-        WHERE key = ${key}
+        WHERE key = $1
         LIMIT 1;
-    `;
-    if (!rows || !rows.rows || rows.rows.length === 0) return null;
-    return rows.rows[0];
+        `,
+        [key]
+    );
+    return result.rows[0] || null;
 }
 
 async function setCache(key, payload, fetchedAtIso) {
-    ensureConnEnv();
-    if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) return;
+    const db = getPool();
+    if (!db) return;
     await ensureTable();
-    await sql`
+    await db.query(
+        `
         INSERT INTO cache_store (key, payload, fetched_at)
-        VALUES (${key}, ${payload}, ${fetchedAtIso})
+        VALUES ($1, $2::jsonb, $3)
         ON CONFLICT (key) DO UPDATE
         SET payload = EXCLUDED.payload,
             fetched_at = EXCLUDED.fetched_at;
-    `;
+        `,
+        [key, JSON.stringify(payload), fetchedAtIso]
+    );
 }
 
 module.exports = { getCache, setCache };
