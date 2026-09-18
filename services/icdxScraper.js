@@ -14,7 +14,6 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const crypto = require("crypto");
 const OpenAI = require("openai");
-const { wrapper } = require("axios-cookiejar-support");
 const { CookieJar } = require("tough-cookie");
 const { parseIdNumber } = require("../utils/number");
 const { getCache, setCache } = require("./cacheStore");
@@ -92,7 +91,12 @@ function parseIcdxDateIso(raw) {
 // masuk redirect loop tak berujung ("Maximum number of redirects exceeded") karena
 // cookie locale/i18n hasil redirect pertama tidak pernah "diingat" di request berikutnya.
 // Makanya dipakai 1 cookie jar yang di-share sepanjang 1 sesi scrape (list + semua detail).
-function createHttpClient() {
+// axios-cookiejar-support terbit sebagai ESM-only package, sedangkan proyek ini
+// CommonJS ("type": "commonjs"). require() biasa akan gagal dengan ERR_REQUIRE_ESM
+// di runtime Node yang belum mendukung require(esm) (mis. Node di Vercel Functions),
+// jadi dimuat lewat dynamic import() yang selalu didukung dari modul CommonJS.
+async function createHttpClient() {
+    const { wrapper } = await import("axios-cookiejar-support");
     const jar = new CookieJar();
     return wrapper(axios.create({ jar, withCredentials: true }));
 }
@@ -364,7 +368,7 @@ async function fetchLatestIcdxPressReleaseWithAi({
         throw new Error("OPENAI_API_KEY belum dikonfigurasi");
     }
 
-    const client = createHttpClient();
+    const client = await createHttpClient();
     const listPages = Math.max(1, Math.min(20, Number(process.env.ICDX_AI_LIST_PAGES || 8)));
     const listItems = [];
     const seenUrls = new Set();
@@ -499,7 +503,7 @@ async function fetchIcdxPressRelease({ limit = DEFAULT_DETAIL_LIMIT, bypassCache
 
     // Satu cookie jar dipakai untuk seluruh sesi (list + semua halaman detail),
     // supaya cookie i18n/Cloudflare dari request pertama terbawa ke request berikutnya.
-    const client = createHttpClient();
+    const client = await createHttpClient();
 
     // 1. Ambil halaman utama press release -> daftar link /news-detail/
     const listHtml = await fetchHtml(client, LIST_URL);
