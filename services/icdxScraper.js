@@ -25,6 +25,23 @@ const LIST_URL = `${BASE_URL}/news/press-release`;
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
 
+// www.icdx.co.id memblokir (403) traffic dari IP datacenter (mis. Vercel Functions)
+// lewat Cloudflare, walau request-nya identik dengan yang berhasil dari IP residensial/
+// kantor. Kalau ICDX_PROXY_URL diisi (mis. "http://user:pass@host:port" dari layanan
+// residential/rotating proxy), semua request ke ICDX dilewatkan proxy itu.
+// https-proxy-agent terbit sebagai ESM-only package, jadi dimuat lewat dynamic import().
+let proxyAgentPromise;
+function getProxyAgent() {
+    const proxyUrl = process.env.ICDX_PROXY_URL;
+    if (!proxyUrl) return Promise.resolve(null);
+    if (!proxyAgentPromise) {
+        proxyAgentPromise = import("https-proxy-agent").then(
+            ({ HttpsProxyAgent }) => new HttpsProxyAgent(proxyUrl)
+        );
+    }
+    return proxyAgentPromise;
+}
+
 const DEFAULT_HEADERS = {
     "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -104,11 +121,15 @@ function parseIcdxDateIso(raw) {
     return `${year}-${month}-${day}`;
 }
 
-function createAxiosClient() {
+async function createAxiosClient() {
+    const proxyAgent = await getProxyAgent();
     return axios.create({
         timeout: 20000,
-        httpAgent,
-        httpsAgent,
+        httpAgent: proxyAgent || httpAgent,
+        httpsAgent: proxyAgent || httpsAgent,
+        // axios kalau tidak dimatikan akan coba baca env HTTP_PROXY/HTTPS_PROXY
+        // sendiri dan bentrok dengan httpsAgent yang sudah di-set manual di atas.
+        proxy: false,
         decompress: true,
         // Redirect diikuti manual (lihat fetchHtml) supaya cookie Set-Cookie di
         // setiap hop bisa ditangkap & dikirim ulang ke hop berikutnya.
@@ -177,8 +198,8 @@ async function followRedirects(session, url, redirectsLeft = 5) {
     return response.data;
 }
 
-function createSession() {
-    return { client: createAxiosClient(), cookieHeader: "" };
+async function createSession() {
+    return { client: await createAxiosClient(), cookieHeader: "" };
 }
 
 async function fetchHtml(session, url, tries = 3) {
@@ -442,7 +463,7 @@ async function fetchLatestIcdxPressReleaseWithAi({
         throw new Error("OPENAI_API_KEY belum dikonfigurasi");
     }
 
-    const session = createSession();
+    const session = await createSession();
     const listPages = Math.max(1, Math.min(20, Number(process.env.ICDX_AI_LIST_PAGES || 8)));
     const listItems = [];
     const seenUrls = new Set();
@@ -578,7 +599,7 @@ async function fetchIcdxPressRelease({ limit = DEFAULT_DETAIL_LIMIT, bypassCache
     // Satu session (cookie header) dipakai untuk seluruh sesi (list + semua halaman
     // detail), supaya cookie i18n/Cloudflare dari request pertama terbawa ke request
     // berikutnya.
-    const session = createSession();
+    const session = await createSession();
 
     // 1. Ambil halaman utama press release -> daftar link /news-detail/
     const listHtml = await fetchHtml(session, LIST_URL);
