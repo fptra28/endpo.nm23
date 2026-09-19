@@ -13,13 +13,17 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 const crypto = require("crypto");
+const http = require("http");
+const https = require("https");
 const OpenAI = require("openai");
-const { CookieJar } = require("tough-cookie");
 const { parseIdNumber } = require("../utils/number");
 const { getCache, setCache } = require("./cacheStore");
 
 const BASE_URL = "https://www.icdx.co.id";
 const LIST_URL = `${BASE_URL}/news/press-release`;
+
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
 
 const DEFAULT_HEADERS = {
     "User-Agent":
@@ -36,6 +40,9 @@ const DEFAULT_HEADERS = {
     "Sec-Fetch-User": "?1",
     "Upgrade-Insecure-Requests": "1",
     Referer: BASE_URL,
+    Connection: "keep-alive",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
 };
 
 const CACHE_KEY = "icdx_press_release";
@@ -97,31 +104,88 @@ function parseIcdxDateIso(raw) {
     return `${year}-${month}-${day}`;
 }
 
-// ICDX ada di belakang Cloudflare + Nuxt i18n redirect: tanpa cookie jar, axios akan
-// masuk redirect loop tak berujung ("Maximum number of redirects exceeded") karena
-// cookie locale/i18n hasil redirect pertama tidak pernah "diingat" di request berikutnya.
-// Makanya dipakai 1 cookie jar yang di-share sepanjang 1 sesi scrape (list + semua detail).
-// axios-cookiejar-support terbit sebagai ESM-only package, sedangkan proyek ini
-// CommonJS ("type": "commonjs"). require() biasa akan gagal dengan ERR_REQUIRE_ESM
-// di runtime Node yang belum mendukung require(esm) (mis. Node di Vercel Functions),
-// jadi dimuat lewat dynamic import() yang selalu didukung dari modul CommonJS.
-async function createHttpClient() {
-    const { wrapper } = await import("axios-cookiejar-support");
-    const jar = new CookieJar();
-    return wrapper(axios.create({ jar, withCredentials: true }));
+function createAxiosClient() {
+    return axios.create({
+        timeout: 20000,
+        httpAgent,
+        httpsAgent,
+        decompress: true,
+        // Redirect diikuti manual (lihat fetchHtml) supaya cookie Set-Cookie di
+        // setiap hop bisa ditangkap & dikirim ulang ke hop berikutnya.
+        maxRedirects: 0,
+        validateStatus: (status) => (status >= 200 && status < 300) || (status >= 300 && status < 400),
+    });
 }
 
-async function fetchHtml(client, url, tries = 3) {
+// Pola yang sama dipakai scraper.js/biFxScraper.js untuk situs lain di belakang
+// Cloudflare: cookie dari Set-Cookie digabung manual ke header Cookie per request,
+// bukan lewat library cookie-jar terpisah.
+function mergeCookieHeader(currentHeader, setCookieHeader) {
+    const cookies = new Map();
+
+    for (const pair of String(currentHeader || "").split(/;\s*/)) {
+        if (!pair) continue;
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(pair.slice(0, separatorIndex), pair.slice(separatorIndex + 1));
+    }
+
+    const newCookies = Array.isArray(setCookieHeader)
+        ? setCookieHeader
+        : setCookieHeader
+          ? [setCookieHeader]
+          : [];
+
+    for (const rawCookie of newCookies) {
+        const pair = String(rawCookie).split(";")[0].trim();
+        const separatorIndex = pair.indexOf("=");
+        if (separatorIndex <= 0) continue;
+        cookies.set(pair.slice(0, separatorIndex), pair.slice(separatorIndex + 1));
+    }
+
+    return Array.from(cookies.entries())
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; ");
+}
+
+// ICDX ada di belakang Cloudflare + Nuxt i18n redirect: cookie locale/i18n dari hop
+// redirect pertama HARUS dibawa ke hop berikutnya, kalau tidak axios (atau server)
+// masuk redirect loop tak berujung ("Maximum number of redirects exceeded"). axios
+// yang mengikuti redirect otomatis (maxRedirects > 0) tidak membawa Set-Cookie dari
+// satu hop ke hop berikutnya dalam satu chain, jadi redirect diikuti manual di sini:
+// tangkap Set-Cookie tiap hop, gabungkan ke header Cookie, lalu lanjut ke Location.
+async function followRedirects(session, url, redirectsLeft = 5) {
+    const response = await session.client.get(url, {
+        headers: {
+            ...DEFAULT_HEADERS,
+            ...(session.cookieHeader ? { Cookie: session.cookieHeader } : {}),
+        },
+    });
+
+    session.cookieHeader = mergeCookieHeader(
+        session.cookieHeader,
+        response.headers?.["set-cookie"]
+    );
+
+    if (response.status >= 300 && response.status < 400) {
+        const location = response.headers?.location;
+        if (!location) throw new Error("Redirect tanpa header Location");
+        if (redirectsLeft <= 0) throw new Error("Maximum number of redirects exceeded");
+        return followRedirects(session, new URL(location, url).toString(), redirectsLeft - 1);
+    }
+
+    return response.data;
+}
+
+function createSession() {
+    return { client: createAxiosClient(), cookieHeader: "" };
+}
+
+async function fetchHtml(session, url, tries = 3) {
     let lastError;
     for (let attempt = 1; attempt <= tries; attempt += 1) {
         try {
-            const response = await client.get(url, {
-                headers: DEFAULT_HEADERS,
-                timeout: 20000,
-                maxRedirects: 5,
-                validateStatus: (status) => status >= 200 && status < 400,
-            });
-            return response.data;
+            return await followRedirects(session, url);
         } catch (error) {
             lastError = error;
             if (attempt < tries) await sleep(500 * attempt);
@@ -378,14 +442,14 @@ async function fetchLatestIcdxPressReleaseWithAi({
         throw new Error("OPENAI_API_KEY belum dikonfigurasi");
     }
 
-    const client = await createHttpClient();
+    const session = createSession();
     const listPages = Math.max(1, Math.min(20, Number(process.env.ICDX_AI_LIST_PAGES || 8)));
     const listItems = [];
     const seenUrls = new Set();
 
     for (let page = 1; page <= listPages && listItems.length < normalizedLimit; page += 1) {
         const pageUrl = page === 1 ? LIST_URL : `${LIST_URL}?page=${page}`;
-        const listHtml = await fetchHtml(client, pageUrl);
+        const listHtml = await fetchHtml(session, pageUrl);
         for (const item of parseListPage(listHtml)) {
             if (seenUrls.has(item.url)) continue;
             seenUrls.add(item.url);
@@ -405,7 +469,7 @@ async function fetchLatestIcdxPressReleaseWithAi({
     const articles = [];
     for (const item of listItems) {
         try {
-            const detail = parseDetailPage(await fetchHtml(client, item.url));
+            const detail = parseDetailPage(await fetchHtml(session, item.url));
             if (!detail.body_text) continue;
             articles.push({
                 ...detail,
@@ -511,19 +575,20 @@ async function fetchIcdxPressRelease({ limit = DEFAULT_DETAIL_LIMIT, bypassCache
         }
     }
 
-    // Satu cookie jar dipakai untuk seluruh sesi (list + semua halaman detail),
-    // supaya cookie i18n/Cloudflare dari request pertama terbawa ke request berikutnya.
-    const client = await createHttpClient();
+    // Satu session (cookie header) dipakai untuk seluruh sesi (list + semua halaman
+    // detail), supaya cookie i18n/Cloudflare dari request pertama terbawa ke request
+    // berikutnya.
+    const session = createSession();
 
     // 1. Ambil halaman utama press release -> daftar link /news-detail/
-    const listHtml = await fetchHtml(client, LIST_URL);
+    const listHtml = await fetchHtml(session, LIST_URL);
     const listItems = parseListPage(listHtml).slice(0, normalizedLimit);
 
     // 2. Loop ke tiap halaman detail terbaru, ambil teks & ekstrak angka
     const data = [];
     for (const item of listItems) {
         try {
-            const detailHtml = await fetchHtml(client, item.url);
+            const detailHtml = await fetchHtml(session, item.url);
             const detail = parseDetailPage(detailHtml);
 
             data.push({
