@@ -445,17 +445,20 @@ async function fetchLatestIcdxPressReleaseWithAi({
     const normalizedLimit = Math.max(1, Math.min(150, Number(limit) || 50));
     const cacheKey = `${AI_CACHE_KEY}_${normalizedLimit}`;
 
-    if (!bypassCache) {
-        try {
-            const cached = await getCache(cacheKey);
-            if (cached && cached.fetched_at) {
-                const fetchedAt = Date.parse(cached.fetched_at);
-                if (Number.isFinite(fetchedAt) && now - fetchedAt < AI_CACHE_TTL_MS) {
-                    return { ...cached.payload, cache: "HIT_DB" };
-                }
-            }
-        } catch (error) {
-            console.error("Gagal membaca cache AI ICDX:", error.message);
+    // Cache selalu dibaca (bukan hanya saat !bypassCache) supaya tetap ada data
+    // fallback kalau live scrape di bawah gagal (mis. 403 karena IP Vercel diblokir
+    // ICDX) - lihat blok catch di akhir fungsi ini.
+    let cachedRow = null;
+    try {
+        cachedRow = await getCache(cacheKey);
+    } catch (error) {
+        console.error("Gagal membaca cache AI ICDX:", error.message);
+    }
+
+    if (!bypassCache && cachedRow && cachedRow.fetched_at) {
+        const fetchedAt = Date.parse(cachedRow.fetched_at);
+        if (Number.isFinite(fetchedAt) && now - fetchedAt < AI_CACHE_TTL_MS) {
+            return { ...cachedRow.payload, cache: "HIT_DB" };
         }
     }
 
@@ -463,109 +466,129 @@ async function fetchLatestIcdxPressReleaseWithAi({
         throw new Error("OPENAI_API_KEY belum dikonfigurasi");
     }
 
-    const session = await createSession();
-    const listPages = Math.max(1, Math.min(20, Number(process.env.ICDX_AI_LIST_PAGES || 8)));
-    const listItems = [];
-    const seenUrls = new Set();
-
-    for (let page = 1; page <= listPages && listItems.length < normalizedLimit; page += 1) {
-        const pageUrl = page === 1 ? LIST_URL : `${LIST_URL}?page=${page}`;
-        const listHtml = await fetchHtml(session, pageUrl);
-        for (const item of parseListPage(listHtml)) {
-            if (seenUrls.has(item.url)) continue;
-            seenUrls.add(item.url);
-            listItems.push(item);
-            if (listItems.length >= normalizedLimit) break;
-        }
-    }
-
-    if (listItems.length === 0) {
-        throw new Error("Tautan detail Press Release ICDX tidak ditemukan");
-    }
-
-    const maxArticleChars = Math.max(
-        2000,
-        Number(process.env.ICDX_AI_MAX_ARTICLE_CHARS || 12000)
-    );
-    const articles = [];
-    for (const item of listItems) {
-        try {
-            const detail = parseDetailPage(await fetchHtml(session, item.url));
-            if (!detail.body_text) continue;
-            articles.push({
-                ...detail,
-                judul: detail.judul || item.judul,
-                tanggal: detail.tanggal || item.tanggal,
-                url: item.url,
-                body_text: detail.body_text.slice(0, maxArticleChars),
-            });
-        } catch (error) {
-            console.error(`Gagal mengambil detail ICDX ${item.url}:`, error.message);
-        }
-        await sleep(REQUEST_DELAY_MS);
-    }
-
-    if (articles.length === 0) throw new Error("Teks detail Press Release ICDX kosong");
-    const batchSize = Math.max(
-        1,
-        Math.min(20, Number(process.env.ICDX_AI_BATCH_SIZE || 8))
-    );
-    const data = [];
-    const seenRows = new Set();
-    const totalBatches = Math.ceil(articles.length / batchSize);
-
-    console.log(
-        `ICDX AI memproses ${articles.length} artikel dalam ${totalBatches} batch`
-    );
-    for (let offset = 0; offset < articles.length; offset += batchSize) {
-        const batchNumber = Math.floor(offset / batchSize) + 1;
-        const batch = articles.slice(offset, offset + batchSize);
-        try {
-            console.log(
-                `ICDX AI batch ${batchNumber}/${totalBatches}: ${batch.length} artikel`
-            );
-            const rows = await extractWithLlm(batch);
-            for (const row of rows) {
-                const rowKey = `${row.label.toLowerCase()}|${row.volume}`;
-                if (seenRows.has(rowKey)) continue;
-                seenRows.add(rowKey);
-                data.push(row);
-            }
-            console.log(
-                `ICDX AI batch ${batchNumber}/${totalBatches} selesai: ${rows.length} baris`
-            );
-        } catch (error) {
-            console.error(
-                `ICDX AI batch ${batchNumber}/${totalBatches} gagal:`,
-                error.message
-            );
-        }
-    }
-
-    if (data.length === 0) {
-        throw new Error("Seluruh batch AI ICDX gagal menghasilkan data");
-    }
-    const fetchedAt = new Date();
-    const { year, month } = getJakartaYearMonth(fetchedAt);
-
-    const payload = {
-        data,
-        year,
-        count: data.length,
-        month,
-        token: createToken(),
-        source: LIST_URL,
-        fetched_at: fetchedAt.toISOString(),
-        cache: "MISS_DB",
-    };
-
     try {
-        await setCache(cacheKey, payload, payload.fetched_at);
-    } catch (error) {
-        console.error("Gagal menyimpan cache AI ICDX:", error.message);
-    }
+        const session = await createSession();
+        const listPages = Math.max(1, Math.min(20, Number(process.env.ICDX_AI_LIST_PAGES || 8)));
+        const listItems = [];
+        const seenUrls = new Set();
 
-    return payload;
+        for (let page = 1; page <= listPages && listItems.length < normalizedLimit; page += 1) {
+            const pageUrl = page === 1 ? LIST_URL : `${LIST_URL}?page=${page}`;
+            const listHtml = await fetchHtml(session, pageUrl);
+            for (const item of parseListPage(listHtml)) {
+                if (seenUrls.has(item.url)) continue;
+                seenUrls.add(item.url);
+                listItems.push(item);
+                if (listItems.length >= normalizedLimit) break;
+            }
+        }
+
+        if (listItems.length === 0) {
+            throw new Error("Tautan detail Press Release ICDX tidak ditemukan");
+        }
+
+        const maxArticleChars = Math.max(
+            2000,
+            Number(process.env.ICDX_AI_MAX_ARTICLE_CHARS || 12000)
+        );
+        const articles = [];
+        for (const item of listItems) {
+            try {
+                const detail = parseDetailPage(await fetchHtml(session, item.url));
+                if (!detail.body_text) continue;
+                articles.push({
+                    ...detail,
+                    judul: detail.judul || item.judul,
+                    tanggal: detail.tanggal || item.tanggal,
+                    url: item.url,
+                    body_text: detail.body_text.slice(0, maxArticleChars),
+                });
+            } catch (error) {
+                console.error(`Gagal mengambil detail ICDX ${item.url}:`, error.message);
+            }
+            await sleep(REQUEST_DELAY_MS);
+        }
+
+        if (articles.length === 0) throw new Error("Teks detail Press Release ICDX kosong");
+        const batchSize = Math.max(
+            1,
+            Math.min(20, Number(process.env.ICDX_AI_BATCH_SIZE || 8))
+        );
+        const data = [];
+        const seenRows = new Set();
+        const totalBatches = Math.ceil(articles.length / batchSize);
+
+        console.log(
+            `ICDX AI memproses ${articles.length} artikel dalam ${totalBatches} batch`
+        );
+        for (let offset = 0; offset < articles.length; offset += batchSize) {
+            const batchNumber = Math.floor(offset / batchSize) + 1;
+            const batch = articles.slice(offset, offset + batchSize);
+            try {
+                console.log(
+                    `ICDX AI batch ${batchNumber}/${totalBatches}: ${batch.length} artikel`
+                );
+                const rows = await extractWithLlm(batch);
+                for (const row of rows) {
+                    const rowKey = `${row.label.toLowerCase()}|${row.volume}`;
+                    if (seenRows.has(rowKey)) continue;
+                    seenRows.add(rowKey);
+                    data.push(row);
+                }
+                console.log(
+                    `ICDX AI batch ${batchNumber}/${totalBatches} selesai: ${rows.length} baris`
+                );
+            } catch (error) {
+                console.error(
+                    `ICDX AI batch ${batchNumber}/${totalBatches} gagal:`,
+                    error.message
+                );
+            }
+        }
+
+        if (data.length === 0) {
+            throw new Error("Seluruh batch AI ICDX gagal menghasilkan data");
+        }
+        const fetchedAt = new Date();
+        const { year, month } = getJakartaYearMonth(fetchedAt);
+
+        const payload = {
+            data,
+            year,
+            count: data.length,
+            month,
+            token: createToken(),
+            source: LIST_URL,
+            fetched_at: fetchedAt.toISOString(),
+            cache: "MISS_DB",
+        };
+
+        try {
+            await setCache(cacheKey, payload, payload.fetched_at);
+        } catch (error) {
+            console.error("Gagal menyimpan cache AI ICDX:", error.message);
+        }
+
+        return payload;
+    } catch (liveError) {
+        // Live scrape gagal (mis. 403 karena IP Vercel diblokir ICDX) - pakai cache
+        // lama dari DB walau sudah kedaluwarsa, daripada balikin error ke client.
+        // Data akan tetap ter-refresh normal kalau live scrape dijalankan manual
+        // dari luar Vercel (mis. dari komputer sendiri) dan hasilnya masuk ke DB ini.
+        if (cachedRow && cachedRow.payload) {
+            console.error(
+                "Live scrape ICDX AI gagal, fallback ke cache lama:",
+                liveError.message
+            );
+            return {
+                ...cachedRow.payload,
+                cache: "STALE_FALLBACK",
+                stale: true,
+                stale_reason: liveError.message,
+            };
+        }
+        throw liveError;
+    }
 }
 
 // --- Orkestrasi: list page -> loop N detail page -> gabungkan hasil ---
@@ -578,17 +601,22 @@ async function fetchIcdxPressRelease({ limit = DEFAULT_DETAIL_LIMIT, bypassCache
 
     const cacheKey = `${CACHE_KEY}_${normalizedLimit}`;
 
+    // Cache selalu dibaca (bukan hanya saat !bypassCache) supaya tetap ada data
+    // fallback kalau live scrape di bawah gagal (mis. 403 karena IP Vercel diblokir
+    // ICDX) - lihat blok catch di akhir fungsi ini.
+    let cachedRow = null;
+    try {
+        cachedRow = await getCache(cacheKey);
+    } catch (error) {
+        console.error("Gagal membaca cache DB ICDX Press Release:", error.message);
+    }
+
     if (!bypassCache) {
-        try {
-            const cached = await getCache(cacheKey);
-            if (cached && cached.fetched_at) {
-                const fetchedAt = Date.parse(cached.fetched_at);
-                if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
-                    return { ...cached.payload, cache: "HIT_DB" };
-                }
+        if (cachedRow && cachedRow.fetched_at) {
+            const fetchedAt = Date.parse(cachedRow.fetched_at);
+            if (Number.isFinite(fetchedAt) && now - fetchedAt < CACHE_TTL_MS) {
+                return { ...cachedRow.payload, cache: "HIT_DB" };
             }
-        } catch (error) {
-            console.error("Gagal membaca cache DB ICDX Press Release:", error.message);
         }
 
         if (memoryCache.payload && now - memoryCache.at < CACHE_TTL_MS) {
@@ -596,67 +624,85 @@ async function fetchIcdxPressRelease({ limit = DEFAULT_DETAIL_LIMIT, bypassCache
         }
     }
 
-    // Satu session (cookie header) dipakai untuk seluruh sesi (list + semua halaman
-    // detail), supaya cookie i18n/Cloudflare dari request pertama terbawa ke request
-    // berikutnya.
-    const session = await createSession();
+    try {
+        // Satu session (cookie header) dipakai untuk seluruh sesi (list + semua halaman
+        // detail), supaya cookie i18n/Cloudflare dari request pertama terbawa ke request
+        // berikutnya.
+        const session = await createSession();
 
-    // 1. Ambil halaman utama press release -> daftar link /news-detail/
-    const listHtml = await fetchHtml(session, LIST_URL);
-    const listItems = parseListPage(listHtml).slice(0, normalizedLimit);
+        // 1. Ambil halaman utama press release -> daftar link /news-detail/
+        const listHtml = await fetchHtml(session, LIST_URL);
+        const listItems = parseListPage(listHtml).slice(0, normalizedLimit);
 
-    // 2. Loop ke tiap halaman detail terbaru, ambil teks & ekstrak angka
-    const data = [];
-    for (const item of listItems) {
-        try {
-            const detailHtml = await fetchHtml(session, item.url);
-            const detail = parseDetailPage(detailHtml);
+        // 2. Loop ke tiap halaman detail terbaru, ambil teks & ekstrak angka
+        const data = [];
+        for (const item of listItems) {
+            try {
+                const detailHtml = await fetchHtml(session, item.url);
+                const detail = parseDetailPage(detailHtml);
 
-            data.push({
-                judul: detail.judul || item.judul,
-                url: item.url,
-                tanggal: detail.tanggal || item.tanggal,
-                tanggal_iso: detail.tanggal_iso || item.tanggal_iso,
-                volume_transaksi_lot: detail.volume_transaksi_lot,
-                nilai_transaksi_triliun_rp: detail.nilai_transaksi_triliun_rp,
-                ekstraksi: detail.ekstraksi,
-            });
-        } catch (error) {
-            // Satu halaman detail gagal diambil tidak boleh menggagalkan seluruh request,
-            // cukup dicatat error-nya di item terkait.
-            data.push({
-                judul: item.judul,
-                url: item.url,
-                tanggal: item.tanggal,
-                tanggal_iso: item.tanggal_iso,
-                volume_transaksi_lot: null,
-                nilai_transaksi_triliun_rp: null,
-                ekstraksi: null,
-                error: `Gagal mengambil halaman detail: ${error.message}`,
-            });
+                data.push({
+                    judul: detail.judul || item.judul,
+                    url: item.url,
+                    tanggal: detail.tanggal || item.tanggal,
+                    tanggal_iso: detail.tanggal_iso || item.tanggal_iso,
+                    volume_transaksi_lot: detail.volume_transaksi_lot,
+                    nilai_transaksi_triliun_rp: detail.nilai_transaksi_triliun_rp,
+                    ekstraksi: detail.ekstraksi,
+                });
+            } catch (error) {
+                // Satu halaman detail gagal diambil tidak boleh menggagalkan seluruh request,
+                // cukup dicatat error-nya di item terkait.
+                data.push({
+                    judul: item.judul,
+                    url: item.url,
+                    tanggal: item.tanggal,
+                    tanggal_iso: item.tanggal_iso,
+                    volume_transaksi_lot: null,
+                    nilai_transaksi_triliun_rp: null,
+                    ekstraksi: null,
+                    error: `Gagal mengambil halaman detail: ${error.message}`,
+                });
+            }
+
+            // Jeda kecil antar request supaya tidak membebani server ICDX
+            await sleep(REQUEST_DELAY_MS);
         }
 
-        // Jeda kecil antar request supaya tidak membebani server ICDX
-        await sleep(REQUEST_DELAY_MS);
+        const payload = {
+            source: LIST_URL,
+            limit: normalizedLimit,
+            count: data.length,
+            data,
+            fetched_at: new Date().toISOString(),
+        };
+
+        memoryCache = { at: now, payload };
+
+        try {
+            await setCache(cacheKey, payload, payload.fetched_at);
+        } catch (error) {
+            console.error("Gagal menulis cache DB ICDX Press Release:", error.message);
+        }
+
+        return { ...payload, cache: "MISS" };
+    } catch (liveError) {
+        // Live scrape gagal (mis. 403 karena IP Vercel diblokir ICDX) - pakai cache
+        // lama dari DB walau sudah kedaluwarsa, daripada balikin error ke client.
+        if (cachedRow && cachedRow.payload) {
+            console.error(
+                "Live scrape ICDX raw gagal, fallback ke cache lama:",
+                liveError.message
+            );
+            return {
+                ...cachedRow.payload,
+                cache: "STALE_FALLBACK",
+                stale: true,
+                stale_reason: liveError.message,
+            };
+        }
+        throw liveError;
     }
-
-    const payload = {
-        source: LIST_URL,
-        limit: normalizedLimit,
-        count: data.length,
-        data,
-        fetched_at: new Date().toISOString(),
-    };
-
-    memoryCache = { at: now, payload };
-
-    try {
-        await setCache(cacheKey, payload, payload.fetched_at);
-    } catch (error) {
-        console.error("Gagal menulis cache DB ICDX Press Release:", error.message);
-    }
-
-    return { ...payload, cache: "MISS" };
 }
 
 module.exports = {
